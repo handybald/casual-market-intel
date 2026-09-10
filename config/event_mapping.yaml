@@ -1,0 +1,72 @@
+# Canonical macro event mapping.
+#
+# MQL5 and Forex Factory label the same economic release differently.
+# `event_family` is the canonical key used everywhere downstream
+# (normalized schema, event bundles, validation joins).
+#
+# `release_bundle` groups events that are published simultaneously and
+# should be treated as one information event by later modeling stages.
+
+CPI_MOM:
+  indicator: "CPI MoM"
+  release_bundle: "CPI"
+  mql5:
+    - "CPI m/m"
+  forex_factory:
+    - "CPI m/m"
+
+CPI_YOY:
+  indicator: "CPI YoY"
+  release_bundle: "CPI"
+  mql5:
+    - "CPI y/y"
+  forex_factory:
+    - "CPI y/y"
+
+CORE_CPI_MOM:
+  indicator: "Core CPI MoM"
+  release_bundle: "CPI"
+  mql5:
+    - "Core CPI m/m"
+  forex_factory:
+    - "Core CPI m/m"
+
+CORE_CPI_YOY:
+  indicator: "Core CPI YoY"
+  release_bundle: "CPI"
+  mql5:
+    - "Core CPI y/y"
+  forex_factory:
+    - "Core CPI y/y"
+
+NFP:
+  indicator: "Nonfarm Payrolls"
+  release_bundle: "EMPLOYMENT"
+  mql5:
+    - "Nonfarm Payrolls"
+  forex_factory:
+    - "Non-Farm Employment Change"
+
+UNEMPLOYMENT_RATE:
+  indicator: "Unemployment Rate"
+  release_bundle: "EMPLOYMENT"
+  mql5:
+    - "Unemployment Rate"
+  forex_factory:
+    - "Unemployment Rate"
+
+AVG_HOURLY_EARNINGS_MOM:
+  indicator: "Average Hourly Earnings MoM"
+  release_bundle: "EMPLOYMENT"
+  mql5:
+    - "Average Hourly Earnings m/m"
+  forex_factory:
+    - "Average Hourly Earnings m/m"
+
+AVG_HOURLY_EARNINGS_YOY:
+  indicator: "Average Hourly Earnings YoY"
+  release_bundle: "EMPLOYMENT"
+  mql5:
+    - "Average Hourly Earnings y/y"
+  forex_factory:
+    - "Average Hourly Earnings y/y"

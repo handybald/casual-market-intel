@@ -1,0 +1,75 @@
+# Central configuration for the historical data ingestion pipeline.
+#
+# `end_date: null` resolves to "today" (UTC date) at run time.
+# All paths are relative to the repository root.
+
+historical:
+  start_date: "2016-01-01"
+  end_date: null
+
+macro:
+  country: "US"
+  currency: "USD"
+
+market:
+  provider: "massive"
+  timeframe: "1min"
+  symbols:
+    - "QQQ"
+    - "SPY"
+  # Symbols likely to be added later. Not fetched unless moved into `symbols`.
+  candidate_symbols:
+    - "IWM"
+    - "DIA"
+    - "SMH"
+    - "SOXX"
+    - "TLT"
+    - "HYG"
+    - "NVDA"
+    - "AMD"
+    - "AVGO"
+    - "MSFT"
+    - "AMZN"
+    - "GOOG"
+    - "META"
+
+storage:
+  raw_root: "data/raw"
+  interim_root: "data/interim"
+  processed_root: "data/processed"
+  manifest_path: "data/manifests/fetch_manifest.json"
+
+# Provider-specific chunking / rate-limit policy. These are internal
+# implementation details the CLI never exposes to the user.
+providers:
+  mql5:
+    chunk_frequency: "month"     # MQL5 calendar API times out on large ranges
+    raw_dir: "data/raw/mql5"
+    input_csv: "data/raw/mql5/us_macro_calendar.csv"  # produced by the .mq5 exporter
+  forex_factory:
+    chunk_frequency: "month"
+    raw_dir: "data/raw/forex_factory"
+    base_url: "https://www.forexfactory.com/calendar"
+    request_delay_seconds: 1.5   # politeness delay between requests
+    max_retries: 5
+  massive:
+    chunk_frequency: "month"     # 1-minute bars: month-sized requests keep row counts bounded
+    raw_dir: "data/raw/massive"
+    base_url: "https://api.massive.dev"  # placeholder; adjust to actual Massive endpoint
+    max_retries: 5
+    request_delay_seconds: 0.25
+    page_limit: 50000            # provider-side max rows per page/request
+  fred:
+    raw_dir: "data/raw/fred"
+    base_url: "https://api.stlouisfed.org/fred"
+    max_retries: 5
+    series:
+      CPIAUCSL: "CPI_NSA"
+      CPILFESL: "CORE_CPI_NSA"
+      PAYEMS: "NFP"
+      UNRATE: "UNEMPLOYMENT_RATE"
+      CES0500000003: "AVG_HOURLY_EARNINGS"
+  bls:
+    raw_dir: "data/raw/bls"
+    base_url: "https://api.bls.gov/publicAPI/v2"
+    max_retries: 5

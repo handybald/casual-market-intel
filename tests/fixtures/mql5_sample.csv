@@ -1,0 +1,5 @@
+event_id,event_name,country_code,currency_code,importance,event_time,unit,actual_value,forecast_value,prev_value,revised_prev_value,source_timezone
+100001,Nonfarm Payrolls,US,USD,HIGH,2024.01.05 13:30:00,K,216.000000,170.000000,173.000000,182.000000,SERVER
+100002,Unemployment Rate,US,USD,HIGH,2024.01.05 13:30:00,%,3.700000,3.800000,3.700000,,SERVER
+100003,CPI m/m,US,USD,HIGH,2024.01.11 13:30:00,%,,0.200000,0.100000,,SERVER
+100004,Some Unmapped MQL5 Event,US,USD,LOW,2024.01.11 13:30:00,,1.000000,1.000000,1.000000,,SERVER
