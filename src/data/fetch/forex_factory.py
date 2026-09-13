@@ -165,16 +165,36 @@ class ParserFailureError(RuntimeError):
     (e.g. site markup changed) -- distinct from an empty-but-valid page."""
 
 
+_CAPTCHA_PHRASES = (
+    "solve this captcha", "solve the captcha", "complete this captcha", "complete the captcha",
+    "verify you are human", "prove you are human", "i'm not a robot",
+)
+
+
 def _cheap_sanity_check(html: str) -> Optional[str]:
     """Fast structural checks that don't require running the real parser
-    -- catch obviously-wrong responses (bot-block pages, truncated
-    bodies) before spending time parsing."""
+    -- catch obviously-wrong responses (bot-block/challenge pages,
+    truncated bodies) before spending time parsing.
+
+    A bare "captcha" substring check was tried and rejected: a genuine,
+    successfully-rendered Forex Factory calendar page embeds its own
+    (unrelated, presumably used by some OTHER form on the site) reCAPTCHA
+    site-key config (`recaptchasitekey: '...'`) on every page -- matching
+    that substring flagged a REAL captured page as a block page. The
+    checks below key on actual block-page LANGUAGE (a natural-language
+    phrase like "solve this captcha", not the bare word) and on
+    Cloudflare's specific challenge-page marker (confirmed against a real
+    403 response from this exact site: `<title>Just a moment...</title>`)
+    instead.
+    """
     if len(html) < 500:
         return "response body suspiciously short"
     lowered = html.lower()
     if "calendar" not in lowered:
         return "response does not look like a Forex Factory calendar page"
-    if "captcha" in lowered:
+    if "<title>just a moment" in lowered:
+        return "response looks like a Cloudflare bot-challenge page (title: 'Just a moment...')"
+    if any(phrase in lowered for phrase in _CAPTCHA_PHRASES):
         return "response looks like a bot-check / block page (captcha)"
     if "checking your browser" in lowered or "access denied" in lowered:
         return "response looks like a bot-check / block page"
@@ -199,7 +219,7 @@ def fetch_forex_factory_month(
     # (currency filtering / event mapping / MacroEvent construction) --
     # parser/downloader separation is preserved at the module-responsibility
     # level, not by literally never importing the parser.
-    from ..normalize.forex_factory import parse_forex_factory_html
+    from ..normalize.forex_factory import parse_forex_factory_page
 
     today = today or dt.date.today()
     provider_cfg = config.provider("forex_factory")
@@ -263,7 +283,7 @@ def fetch_forex_factory_month(
         return MonthFetchResult(year, month, attempt_path, "failed", len(html), error=sanity_error, retrieved_at=retrieved_at)
 
     try:
-        parsed_rows = parse_forex_factory_html(html, year, month)
+        parsed_rows = parse_forex_factory_page(html, year, month)
     except Exception as exc:  # noqa: BLE001 - parser broke on real markup change
         logger.error("[ForexFactory] %s FAILED to parse: %s", start, exc)
         manifest.record(

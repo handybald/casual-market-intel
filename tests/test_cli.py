@@ -214,40 +214,45 @@ def test_mql5_normalized_output_excludes_rows_outside_requested_range(isolated_b
     assert release_dates == {dt.date(2024, 1, 5)}  # NOT the Feb 5 row
 
 
-def test_forex_factory_normalized_output_excludes_days_outside_requested_range(isolated_bootstrap, monkeypatch):
-    import datetime as dt
-
+def test_forex_factory_bootstrap_never_fetches_live_and_reports_gap(isolated_bootstrap, monkeypatch):
+    """Historical Forex Factory is import-only now (forexfactory.com
+    blocks automated requests with an active Cloudflare challenge --
+    see scripts/import_forex_factory.py's module docstring). The
+    bootstrap must never attempt a network request for it, and must
+    clearly report a gap (non-zero exit) when nothing has been
+    imported for the requested range yet."""
     from src.data.fetch import forex_factory as ff_fetch
-    from src.data.normalize.io import read_events
-    from types import SimpleNamespace
 
-    html = """
-    <tr class="calendar__row calendar__row--day-breaker"><td class="calendar__date"><span>Fri Jan 5</span></td></tr>
-    <tr class="calendar__row">
-      <td class="calendar__date"></td><td class="calendar__time">8:30am</td>
-      <td class="calendar__currency">USD</td>
-      <td class="calendar__impact"><span class="icon icon--ff-impact-red"></span></td>
-      <td class="calendar__event"><span class="calendar__event-title">CPI m/m</span></td>
-      <td class="calendar__actual">0.3%</td><td class="calendar__forecast">0.3%</td><td class="calendar__previous">0.3%</td>
-    </tr>
-    <tr class="calendar__row calendar__row--day-breaker"><td class="calendar__date"><span>Mon Jan 22</span></td></tr>
-    <tr class="calendar__row">
-      <td class="calendar__date"></td><td class="calendar__time">8:30am</td>
-      <td class="calendar__currency">USD</td>
-      <td class="calendar__impact"><span class="icon icon--ff-impact-red"></span></td>
-      <td class="calendar__event"><span class="calendar__event-title">CPI m/m</span></td>
-      <td class="calendar__actual">0.4%</td><td class="calendar__forecast">0.4%</td><td class="calendar__previous">0.4%</td>
-    </tr>
-    """
-    monkeypatch.setattr(ff_fetch, "request_with_retry", lambda *a, **k: SimpleNamespace(text=html))
+    def _fail_if_called(*a, **k):
+        raise AssertionError("forex_factory must never make a live HTTP request from the bootstrap")
 
-    # Request only the FIRST 10 days of January -- the full month page
-    # (fetched regardless, per fetch/forex_factory.py's design) contains
-    # both Jan 5 (in range) and Jan 22 (out of range).
+    monkeypatch.setattr(ff_fetch, "request_with_retry", _fail_if_called)
+
+    code = bootstrap.main(["--sources", "forex_factory", "--start", "2024-01-01", "--end", "2024-01-10"])
+    assert code == 1  # nothing imported yet for this range -- a real, reported gap
+
+
+def test_forex_factory_bootstrap_reports_success_once_imported(isolated_bootstrap, monkeypatch):
+    """Once scripts/import_forex_factory.py has populated the manifest
+    for the requested range (simulated here directly, since the actual
+    import path is tested in test_import_forex_factory.py), the
+    bootstrap must recognize it as covered and still never fetch live."""
+    from src.data.fetch import forex_factory as ff_fetch
+    from src.data.fetch.forex_factory import MANIFEST_KEY
+    from src.data.manifest import Manifest, ManifestEntry
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("forex_factory must never make a live HTTP request from the bootstrap")
+
+    monkeypatch.setattr(ff_fetch, "request_with_retry", _fail_if_called)
+
+    manifest = Manifest(isolated_bootstrap.manifest_path)
+    manifest.record(
+        ManifestEntry(
+            provider="forex_factory", key=MANIFEST_KEY, start="2024-01-01", end="2024-01-31",
+            status="complete", rows=2, checksum="deadbeef", path=None,
+        )
+    )
+
     code = bootstrap.main(["--sources", "forex_factory", "--start", "2024-01-01", "--end", "2024-01-10"])
     assert code == 0
-
-    events_path = isolated_bootstrap.interim_root / "macro" / "forex_factory_events.parquet"
-    events = read_events(events_path)
-    dates = {e.source_timestamp.date() for e in events}
-    assert dates == {dt.date(2024, 1, 5)}  # NOT Jan 22

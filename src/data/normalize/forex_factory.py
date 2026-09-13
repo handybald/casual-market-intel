@@ -10,10 +10,11 @@ in this module.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import re
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 from bs4 import BeautifulSoup
 
@@ -50,6 +51,16 @@ class ForexFactoryRawRow(NamedTuple):
     actual_raw: str
     forecast_raw: str
     previous_raw: str
+    # Populated only when parsed from the page's embedded structured
+    # data (parse_forex_factory_structured) -- the HTML-table parser
+    # (parse_forex_factory_html) has no source for any of these, so they
+    # stay at their defaults (None/""/False) on that path. See
+    # normalize_forex_factory_rows for how each is used.
+    event_instance_id: Optional[str] = None  # Forex Factory's own per-release id -- canonical event_id
+    event_template_id: Optional[str] = None  # Forex Factory's own recurring-event id ("ebaseId") -- source_event_id
+    revision_raw: str = ""  # the page's own revised-previous text, distinct from `previous_raw`
+    release_dateline_utc: Optional[int] = None  # precise Unix timestamp (seconds) for this specific release
+    time_masked: bool = False  # True for "All Day"/tentative releases -- release_dateline_utc is a day anchor, not a precise instant, when this is True
 
 
 def _clean(text: Optional[str]) -> str:
@@ -145,6 +156,190 @@ def parse_forex_factory_html(
         )
 
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Structured-data parser (primary source when available)
+#
+# Every Forex Factory calendar page ALSO embeds the exact data backing its
+# table as a JS object literal: `window.calendarComponentStates[N] = {
+# days: [...] }`. The `days` array's own contents (each day, and every
+# event nested inside it) are plain, fully double-quoted JSON -- only the
+# OUTER wrapping object (siblings of `days` like `time`, `upNext`,
+# `defaultSearchSuggestions`) uses non-JSON JS literal syntax (unquoted
+# keys, single-quoted strings) that we never need to touch, since we only
+# ever bracket-match and `json.loads()` the `days` array itself.
+#
+# PREFERRED over the HTML table (parse_forex_factory_html) when present:
+# it carries fields the table's DOM never exposes at all -- Forex
+# Factory's own event/template ids, a precise per-event Unix timestamp
+# (`dateline`), and the revised-previous value -- and it is immune to the
+# table's markup changing shape. Multiple identical state blocks are
+# common on one page (observed: two, byte-identical, on a real captured
+# page); every block found is parsed and events are deduplicated by id
+# (last occurrence wins), so this stays safe even if the duplication
+# count/reason ever changes.
+# ---------------------------------------------------------------------------
+
+_DAYS_ARRAY_RE = re.compile(r"calendarComponentStates\[\d+\]\s*=\s*\{\s*days:\s*\[")
+
+
+def _extract_days_arrays(html: str) -> List[str]:
+    """Bracket-matches each `days: [...]` array following a
+    `calendarComponentStates[N] = {` assignment, returning each array's
+    raw text (still needing json.loads). Never touches anything outside
+    that bracket-matched span, so the surrounding non-JSON JS syntax
+    elsewhere in the same object is never a concern."""
+    arrays: List[str] = []
+    for m in _DAYS_ARRAY_RE.finditer(html):
+        start = m.end() - 1  # position of the opening '['
+        depth = 0
+        i = start
+        n = len(html)
+        while i < n:
+            ch = html[i]
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    arrays.append(html[start : i + 1])
+                    break
+            i += 1
+    return arrays
+
+
+def _parse_structured_day_date(date_text: str) -> Optional[dt.date]:
+    """A day object's own "date" field, e.g. "Jan 20, 2016" -- distinct
+    from the day object's OTHER "date" field ("Fri <span>Jan 1</span>",
+    only present at the top of each day entry, never on an individual
+    event); every EVENT's own "date" is always the plain "Mon D, YYYY"
+    form, which is what this parses."""
+    try:
+        return dt.datetime.strptime(date_text.strip(), "%b %d, %Y").date()
+    except ValueError:
+        return None
+
+
+def parse_forex_factory_structured(html: str) -> List[ForexFactoryRawRow]:
+    """Extracts every `calendarComponentStates[N] = { days: [...] }` block
+    embedded in `html` and returns one ForexFactoryRawRow per event,
+    deduplicated by Forex Factory's own event id (last occurrence wins
+    across blocks). Returns an EMPTY list (never raises) if the page has
+    no such block, or if none of the blocks found parse as valid JSON --
+    callers must treat that as "structured data unavailable" and fall
+    back to parse_forex_factory_html, never as an error on its own.
+    """
+    by_id: Dict[str, ForexFactoryRawRow] = {}
+
+    for array_text in _extract_days_arrays(html):
+        try:
+            days = json.loads(array_text)
+        except json.JSONDecodeError:
+            logger.warning(
+                "[ForexFactory parse] found a calendarComponentStates days array that is not valid JSON -- skipping this block"
+            )
+            continue
+
+        for day in days:
+            event_date = _parse_structured_day_date(str(day.get("date", "")))
+            for event in day.get("events", []):
+                event_id = event.get("id")
+                if event_id is None:
+                    continue
+                # An event's OWN "date" (e.g. "Jan 20, 2016") is
+                # authoritative when present; the day entry's date is
+                # only a fallback for the rare event missing its own.
+                row_date = _parse_structured_day_date(str(event.get("date", ""))) or event_date
+                if row_date is None:
+                    continue
+                ebase_id = event.get("ebaseId")
+                dateline = event.get("dateline")
+                by_id[str(event_id)] = ForexFactoryRawRow(
+                    date=row_date,
+                    time_raw=str(event.get("timeLabel", "")),
+                    currency=str(event.get("currency", "")),
+                    impact=_impact_from_classes([str(event.get("impactClass", ""))]),
+                    event_name=str(event.get("name", "")),
+                    actual_raw=str(event.get("actual", "")),
+                    forecast_raw=str(event.get("forecast", "")),
+                    previous_raw=str(event.get("previous", "")),
+                    event_instance_id=str(event_id),
+                    event_template_id=(str(ebase_id) if ebase_id is not None else None),
+                    revision_raw=str(event.get("revision", "")),
+                    release_dateline_utc=(int(dateline) if dateline is not None else None),
+                    time_masked=bool(event.get("timeMasked", False)),
+                )
+
+    return list(by_id.values())
+
+
+def parse_forex_factory_day_dates(html: str, display_timezone: str = "America/New_York") -> List[dt.date]:
+    """The TRUE set of calendar days a page's structured data actually
+    rendered -- including zero-event days (weekends, holidays with no
+    tracked release) that `parse_forex_factory_structured` never
+    produces a row for at all. Used to tell "this month has at least one
+    event" (which parse_forex_factory_structured alone can only answer)
+    apart from "this month's coverage is actually complete" -- a real
+    captured page can legitimately stop mid-month, and the caller must
+    not conflate the two.
+
+    Each day object carries its OWN `dateline` (a Unix timestamp
+    anchoring that calendar day at local midnight) IN ADDITION to a
+    human-readable, year-LESS "date" string ("Fri <span>Jan 1</span>") --
+    `dateline` is used here specifically because it is unambiguous and
+    year-inclusive; verified against a real captured page: dateline
+    1451624400 decodes to 2016-01-01 00:00:00 in America/New_York,
+    exactly "Fri Jan 1" 2016 (see normalize_forex_factory_rows for the
+    equivalent event-level verification).
+    `display_timezone` is the NAMED zone (e.g. "America/New_York") used
+    to convert each day's `dateline` into a calendar date -- prefer
+    passing the page's own `timezone_name` (parse_forex_factory_
+    timezone_name) over the "America/New_York" default when available.
+    Deliberately a named zone, never a raw numeric UTC offset: a real
+    captured page separately exposes `timezone: '-4'.replace(...)` (the
+    CURRENT session's offset at save time, e.g. EDT in September) right
+    next to `timezone_name: 'America/New_York'` -- using the numeric
+    offset for a January date would apply the wrong (summer, not
+    winter) DST rule. `zoneinfo.ZoneInfo` resolves DST correctly for
+    ANY historical date given the named zone, which is why only the
+    name is ever used here.
+    """
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(display_timezone)
+    dates: set[dt.date] = set()
+    for array_text in _extract_days_arrays(html):
+        try:
+            days = json.loads(array_text)
+        except json.JSONDecodeError:
+            continue
+        for day in days:
+            dateline = day.get("dateline")
+            if dateline is None:
+                continue
+            try:
+                utc_dt = dt.datetime.fromtimestamp(int(dateline), tz=dt.timezone.utc)
+                dates.add(utc_dt.astimezone(tz).date())
+            except (OSError, OverflowError, ValueError):
+                continue
+    return sorted(dates)
+
+
+_TIMEZONE_NAME_RE = re.compile(r"timezone_name:\s*'([^']+)'")
+
+
+def parse_forex_factory_timezone_name(html: str) -> Optional[str]:
+    """Extracts the page's own declared display timezone, e.g.
+    `timezone_name: 'America/New_York'` from `window.FF = {...}`.
+    Deliberately does NOT read the neighboring `timezone: '-4'...`
+    field -- that is a raw numeric UTC offset for whatever moment the
+    page happened to be SAVED, not a fact about any of the historical
+    dates the page describes (see parse_forex_factory_day_dates for the
+    concrete DST trap this avoids). Returns None if not found -- callers
+    should fall back to the configured default, never guess a value."""
+    match = _TIMEZONE_NAME_RE.search(html)
+    return match.group(1) if match else None
 
 
 _NUMERIC_RE = re.compile(r"-?\d+(?:\.\d+)?")
@@ -250,7 +445,26 @@ def normalize_forex_factory_rows(
             continue
 
         naive_dt = _parse_time_of_day(row.date, row.time_raw)
-        if naive_dt is None:
+
+        # PRECISE PROVENANCE PATH: when this row came from the embedded
+        # structured data (parse_forex_factory_structured), Forex
+        # Factory's own `dateline` is a genuine Unix timestamp -- UTC by
+        # definition, no timezone assumption involved at all. Verified
+        # against a real captured page: dateline 1453282200 decodes to
+        # 2016-01-20 09:30:00 UTC, which is exactly 2016-01-20 04:30:00
+        # America/New_York -- matching that event's own displayed
+        # "4:30am" timeLabel precisely (also independently confirming
+        # America/New_York as this page's real display timezone). This
+        # is strictly better evidence than parsing "4:30am" text and
+        # ASSUMING a timezone, so it earns CONFIRMED quality outright --
+        # never gated behind `display_timezone_verified` the way the
+        # text-parsing fallback below is. `time_masked` (Forex Factory's
+        # own flag for "All Day"/tentative releases) excludes this path:
+        # for those, `dateline` anchors the DAY, not a precise instant.
+        if row.release_dateline_utc is not None and not row.time_masked:
+            release_ts = dt.datetime.fromtimestamp(row.release_dateline_utc, tz=dt.timezone.utc)
+            quality = TimestampQuality.CONFIRMED
+        elif naive_dt is None:
             # "All Day" / "Tentative" releases have no precise instant to
             # convert, regardless of timezone -- kept distinct from a
             # genuinely resolved timestamp rather than defaulted to
@@ -277,10 +491,25 @@ def normalize_forex_factory_rows(
         actual = parse_value_with_unit(row.actual_raw)
         forecast = parse_value_with_unit(row.forecast_raw)
         previous = parse_value_with_unit(row.previous_raw)
+        revision = parse_value_with_unit(row.revision_raw)
+
+        # Canonical event_id prefers Forex Factory's OWN per-release id
+        # (stable, globally unique, immune to text-formatting quirks)
+        # when the structured-data parser provided one; the HTML-table
+        # parser has no such id, so it keeps a composite fallback
+        # identity instead: date + currency + displayed time + name
+        # (currency included so two DIFFERENT countries' same-named/
+        # same-time events, e.g. a shared "Rate Decision" release label,
+        # can never collide).
+        event_id = (
+            f"ff:{row.event_instance_id}"
+            if row.event_instance_id
+            else f"ff:{row.date.isoformat()}:{row.currency}:{row.time_raw}:{row.event_name}"
+        )
 
         events.append(
             MacroEvent(
-                event_id=f"ff:{row.date.isoformat()}:{row.time_raw}:{row.event_name}",
+                event_id=event_id,
                 event_family=mapping.event_family,
                 indicator=mapping.indicator,
                 release_bundle=mapping.release_bundle,
@@ -298,9 +527,10 @@ def normalize_forex_factory_rows(
                 previous=previous.value,
                 previous_unit=previous.unit,
                 previous_raw_text=previous.raw_text or None,
+                revised_previous=revision.value,
                 importance=row.impact,
                 source=MacroSource.FOREX_FACTORY,
-                source_event_id=None,
+                source_event_id=row.event_template_id,
                 source_timestamp=naive_dt,
                 source_timezone=display_timezone if (naive_dt is not None and display_timezone) else "UNKNOWN",
                 source_url=source_url,
@@ -310,6 +540,21 @@ def normalize_forex_factory_rows(
         )
 
     return events
+
+
+def parse_forex_factory_page(html: str, year: int, month: int) -> List[ForexFactoryRawRow]:
+    """Structured data first, HTML-table fallback -- the one entry point
+    both the checkpoint-validating downloader (fetch/forex_factory.py)
+    and normalize_forex_factory_file should use, so neither has to
+    duplicate the "prefer structured, fall back to table" decision.
+    `year`/`month` are only used by the table-parser fallback (to
+    disambiguate a bare "Jan 20" date cell); the structured-data path
+    ignores them -- every event there already carries its own full date.
+    """
+    structured_rows = parse_forex_factory_structured(html)
+    if structured_rows:
+        return structured_rows
+    return parse_forex_factory_html(html, year, month)
 
 
 def normalize_forex_factory_file(
@@ -325,7 +570,7 @@ def normalize_forex_factory_file(
     from ..manifest import checksum_file
 
     html = path.read_text(encoding="utf-8")
-    raw_rows = parse_forex_factory_html(html, year, month)
+    raw_rows = parse_forex_factory_page(html, year, month)
     return normalize_forex_factory_rows(
         raw_rows,
         event_mapping,
