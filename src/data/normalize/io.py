@@ -9,8 +9,14 @@ import pandas as pd
 from ..schemas import MacroEvent
 
 EVENT_COLUMNS = list(MacroEvent.model_fields.keys())
-_DATETIME_FIELDS = {"release_timestamp_utc", "release_timestamp_ny", "source_timestamp", "retrieval_timestamp_utc"}
-_DATE_FIELDS = {"official_vintage_date"}
+_DATETIME_FIELDS = {
+    "release_timestamp_utc",
+    "release_timestamp_ny",
+    "source_timestamp",
+    "retrieval_timestamp_utc",
+    "normalized_at_utc",
+}
+_DATE_FIELDS = {"official_vintage_date", "reference_period"}
 
 
 def events_to_dataframe(events: List[MacroEvent]) -> pd.DataFrame:
@@ -31,7 +37,10 @@ def merge_write_events(events: List[MacroEvent], path: Path) -> pd.DataFrame:
 
     if not combined.empty:
         combined = combined.drop_duplicates(subset=["event_id"], keep="last")
-        combined = combined.sort_values("release_timestamp_utc").reset_index(drop=True)
+        # release_timestamp_utc can be null (quarantined rows) -- sort with
+        # nulls last so a mixed column never raises and quarantined rows
+        # stay easy to spot at the tail rather than interleaved arbitrarily.
+        combined = combined.sort_values("release_timestamp_utc", na_position="last").reset_index(drop=True)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".parquet.tmp")
@@ -48,18 +57,26 @@ def read_events(path: Path) -> List[MacroEvent]:
     return dataframe_to_events(df)
 
 
+def _is_na(value) -> bool:
+    try:
+        result = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    return bool(result)
+
+
 def dataframe_to_events(df: pd.DataFrame) -> List[MacroEvent]:
     events: List[MacroEvent] = []
     for row in df.to_dict(orient="records"):
         for field in _DATETIME_FIELDS:
             value = row.get(field)
-            if value is not None and hasattr(value, "to_pydatetime"):
+            if value is not None and not _is_na(value) and hasattr(value, "to_pydatetime"):
                 row[field] = value.to_pydatetime()
         for field in _DATE_FIELDS:
             value = row.get(field)
-            if value is not None and hasattr(value, "date"):
+            if value is not None and not _is_na(value) and hasattr(value, "date"):
                 row[field] = value.date()
-        # NaN (missing) -> None for pydantic
-        row = {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in row.items()}
+        # NaN/NaT (missing) -> None for pydantic, for any field type.
+        row = {k: (None if _is_na(v) else v) for k, v in row.items()}
         events.append(MacroEvent(**row))
     return events

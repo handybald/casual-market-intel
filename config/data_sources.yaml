@@ -46,30 +46,135 @@ providers:
     chunk_frequency: "month"     # MQL5 calendar API times out on large ranges
     raw_dir: "data/raw/mql5"
     input_csv: "data/raw/mql5/us_macro_calendar.csv"  # produced by the .mq5 exporter
+    # The MetaTrader broker/server timezone the exporter's timestamps are
+    # actually in. We have NO way to know this from Python -- leave null
+    # (the honest default) to quarantine timestamps (release_timestamp_utc
+    # = null, timestamp_quality = UNRESOLVED) until an operator confirms
+    # it against their specific broker, e.g. "Europe/Helsinki". Once set,
+    # conversion is DST-correct for the historical date of each event
+    # (zoneinfo, not a fixed present-day offset).
+    broker_timezone: null
+
   forex_factory:
     chunk_frequency: "month"
     raw_dir: "data/raw/forex_factory"
     base_url: "https://www.forexfactory.com/calendar"
     request_delay_seconds: 1.5   # politeness delay between requests
     max_retries: 5
+    # Forex Factory's calendar times are shown in the viewer's session
+    # timezone. For an anonymous/no-cookie session (which is what a
+    # scraper is) the site's long-documented default is US Eastern time.
+    # This is an ASSUMPTION, not independently verified live in this
+    # deployment -- normalized rows are tagged timestamp_quality=ASSUMED,
+    # not CONFIRMED, so downstream code can tell the difference. Override
+    # here if you've confirmed otherwise for your fetch setup.
+    display_timezone: "America/New_York"
+    # Set to true ONLY after an operator has independently confirmed
+    # (e.g. cross-checked several known release times, like 08:30 ET
+    # NFP, against raw fetched pages) that `display_timezone` above is
+    # actually correct for this deployment's fetch setup. Flips
+    # normalized rows from timestamp_quality=ASSUMED to CONFIRMED.
+    # Precision-sensitive joins (e.g. minute-level macro-release-window
+    # checks in scripts/validate_data.py) only trust CONFIRMED rows --
+    # leaving this false is the honest default, not a limitation to
+    # silently work around.
+    display_timezone_verified: false
+    # Revision-overlap window: the current calendar month is always
+    # re-fetched (never cached as "complete") because forecasts, actuals,
+    # and revisions keep appearing throughout the month.
+
   massive:
     chunk_frequency: "month"     # 1-minute bars: month-sized requests keep row counts bounded
     raw_dir: "data/raw/massive"
-    base_url: "https://api.massive.dev"  # placeholder; adjust to actual Massive endpoint
+    base_url: "https://api.massive.com"
+    # Documented v2 aggregates endpoint:
+    # https://www.massive.com/docs/rest/stocks/aggregates/custom-bars
+    # GET /v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from}/{to}
+    timespan: "minute"
+    multiplier: 1
+    adjusted: false               # explicit adjustment policy -- see fetch/massive.py
+    sort: "asc"
     max_retries: 5
     request_delay_seconds: 0.25
     page_limit: 50000            # provider-side max rows per page/request
+    # Bounded trailing re-fetch (in calendar days) applied on every run to
+    # the most recent stored data, to catch late prints/corrections to
+    # sessions that were provisional when first fetched.
+    revision_overlap_days: 3
+
   fred:
     raw_dir: "data/raw/fred"
     base_url: "https://api.stlouisfed.org/fred"
     max_retries: 5
-    series:
-      CPIAUCSL: "CPI_NSA"
-      CPILFESL: "CORE_CPI_NSA"
-      PAYEMS: "NFP"
-      UNRATE: "UNEMPLOYMENT_RATE"
-      CES0500000003: "AVG_HOURLY_EARNINGS"
+    # FRED series for these monthly macro indicators are small (a few
+    # hundred rows over a decade). Rather than an incremental narrow
+    # window (which would miss revisions to already-published periods
+    # and late-arriving back-dated observations -- see fetch/fred.py),
+    # every fetch requests the FULL configured historical range and each
+    # response is preserved as its own immutable, timestamped snapshot.
+    # `event_family`/`transform` map each series onto the canonical
+    # MacroEvent schema for cross-source validation. Verify series
+    # labels against FRED before trusting them -- CPIAUCSL/CPILFESL are
+    # SEASONALLY ADJUSTED (the "SL" suffix), NOT NSA; CPIAUCNS/CPILFENS
+    # are the not-seasonally-adjusted counterparts.
+    official_series:
+      - series_id: "CPIAUCSL"
+        event_family: "CPI_MOM"
+        seasonal_adjustment: "SA"
+        transform: "pct_change_1"     # headline CPI MoM is conventionally SA
+        result_unit: "PERCENT"
+      - series_id: "CPIAUCNS"
+        event_family: "CPI_YOY"
+        seasonal_adjustment: "NSA"
+        transform: "pct_change_12"    # headline CPI YoY is conventionally NSA
+        result_unit: "PERCENT"
+      - series_id: "CPILFESL"
+        event_family: "CORE_CPI_MOM"
+        seasonal_adjustment: "SA"
+        transform: "pct_change_1"
+        result_unit: "PERCENT"
+      - series_id: "CPILFENS"
+        event_family: "CORE_CPI_YOY"
+        seasonal_adjustment: "NSA"
+        transform: "pct_change_12"
+        result_unit: "PERCENT"
+      - series_id: "PAYEMS"
+        event_family: "NFP"
+        seasonal_adjustment: "SA"
+        transform: "diff_1"           # NFP release IS the level's month-over-month change
+        result_unit: "THOUSANDS"      # PAYEMS is published in thousands of persons
+      - series_id: "UNRATE"
+        event_family: "UNEMPLOYMENT_RATE"
+        seasonal_adjustment: "SA"
+        transform: "identity"         # already a rate level
+        result_unit: "PERCENT"
+      - series_id: "CES0500000003"
+        event_family: "AVG_HOURLY_EARNINGS_MOM"
+        seasonal_adjustment: "SA"
+        transform: "pct_change_1"
+        result_unit: "PERCENT"
+      - series_id: "CES0500000003"
+        event_family: "AVG_HOURLY_EARNINGS_YOY"
+        seasonal_adjustment: "SA"
+        transform: "pct_change_12"
+        result_unit: "PERCENT"
+    # Extra lookback (calendar days) requested before historical.start_date
+    # so the very first in-range MoM/YoY/diff value can actually be
+    # computed (pct_change_12 needs 12 prior monthly observations) --
+    # purely an internal fetch detail, never exposed to the user's
+    # requested range.
+    lookback_buffer_days: 400
+
   bls:
+    # Real, implemented adapter (see fetch/bls.py) -- deliberately
+    # configured with 0 series by default. FRED already covers the
+    # currently-mapped indicators (config `providers.fred.official_series`);
+    # add BLS series IDs here (e.g. "CUUR0000SA0" for CPI-U, "LNS14000000"
+    # for the unemployment rate) to actually fetch them. `--sources bls`
+    # with an empty list here reports a truthful non-success, not a silent no-op.
+    enabled: false
     raw_dir: "data/raw/bls"
     base_url: "https://api.bls.gov/publicAPI/v2"
     max_retries: 5
+    max_years_per_request: 10     # BLS v2 unregistered-key limit
+    series: []

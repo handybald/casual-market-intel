@@ -1,7 +1,11 @@
 """Parse raw Forex Factory calendar HTML and normalize into MacroEvent.
 
-Parser is kept separate from the downloader (fetch/forex_factory.py) so
-raw HTML can be re-parsed without re-fetching if the parser needs a fix.
+Parser is kept separate from the downloader (fetch/forex_factory.py) in
+the sense that all HTML structural parsing lives HERE; fetch.py imports
+`parse_forex_factory_html` only to validate a download before recording
+it as a checkpoint -- it does not duplicate parsing logic or reach into
+currency filtering / event mapping / MacroEvent construction, which stay
+in this module.
 """
 from __future__ import annotations
 
@@ -14,8 +18,9 @@ from typing import List, NamedTuple, Optional
 from bs4 import BeautifulSoup
 
 from ..event_mapping import EventMapping
-from ..schemas import MacroEvent, MacroSource
-from ..timeutil import now_utc
+from ..reference_period import infer_prior_month_reference_period
+from ..schemas import MacroEvent, MacroSource, TimestampQuality, ValueUnit
+from ..timeutil import normalize_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +39,6 @@ _IMPACT_MAP = {
     "gray": "NONE",
     "grey": "NONE",
 }
-
-# Assumed display timezone for an anonymous Forex Factory session.
-# NOT independently verified live in this environment -- treated as an
-# unconfirmed assumption (see schemas.MacroEvent.timestamp_is_trustworthy).
-ASSUMED_DISPLAY_TIMEZONE = "SERVER"
 
 
 class ForexFactoryRawRow(NamedTuple):
@@ -88,8 +88,6 @@ def parse_forex_factory_html(
 
     table_rows = soup.select("tr.calendar__row")
     for tr in table_rows:
-        classes = tr.get("class", [])
-
         date_cell = tr.select_one(".calendar__date")
         if date_cell is not None:
             date_text = _clean(date_cell.get_text(" "))
@@ -150,22 +148,50 @@ def parse_forex_factory_html(
 
 
 _NUMERIC_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_SUFFIX_MULTIPLIER = {"K": 1e3, "M": 1e6, "B": 1e9}
 
 
-def _parse_numeric(raw: str) -> Optional[float]:
-    """Forex Factory renders values like '3.1%', '150K', '1.2M', '-0.2%'.
-    Extract the numeric magnitude; unit suffix (%, K, M, B) is not applied
-    as a multiplier here -- we store the literal printed number and keep
-    `unit` separate, since silently guessing a K/M/B multiplier for a
-    field we don't have a strong unit contract for risks corrupting values.
+class ParsedValue(NamedTuple):
+    value: Optional[float]
+    unit: ValueUnit
+    raw_text: str
+
+
+def parse_value_with_unit(raw: str) -> ParsedValue:
+    """Forex Factory renders values like '3.1%', '150K', '2.5M', '-0.2%'.
+
+    K/M/B suffixes are converted into a single canonical unit
+    (THOUSANDS) so equal real-world quantities compare equal regardless
+    of which suffix the page happened to render -- "2.5M" and "2500K"
+    both normalize to 2500.0 THOUSANDS, not 2.5 and 2500 as two
+    unrelated numbers. Percentages keep their literal percent value
+    (0.3 for "0.3%"). A bare number with no suffix/percent is a LEVEL.
+    Ambiguous/unparseable text is UNKNOWN with value=None -- we do not
+    guess.
     """
-    raw = raw.strip()
+    raw = (raw or "").strip()
     if not raw or raw in {"-", "—"}:
-        return None
-    match = _NUMERIC_RE.search(raw.replace(",", ""))
+        return ParsedValue(None, ValueUnit.UNKNOWN, raw)
+
+    is_percent = raw.endswith("%")
+    text = raw[:-1].strip() if is_percent else raw
+
+    suffix = None
+    if text and text[-1].upper() in _SUFFIX_MULTIPLIER:
+        suffix = text[-1].upper()
+        text = text[:-1]
+
+    match = _NUMERIC_RE.search(text.replace(",", ""))
     if not match:
-        return None
-    return float(match.group(0))
+        return ParsedValue(None, ValueUnit.UNKNOWN, raw)
+    number = float(match.group(0))
+
+    if is_percent:
+        return ParsedValue(number, ValueUnit.PERCENT, raw)
+    if suffix:
+        thousands = number * _SUFFIX_MULTIPLIER[suffix] / 1000.0
+        return ParsedValue(thousands, ValueUnit.THOUSANDS, raw)
+    return ParsedValue(number, ValueUnit.LEVEL, raw)
 
 
 def _parse_time_of_day(date: dt.date, time_raw: str) -> Optional[dt.datetime]:
@@ -191,10 +217,27 @@ def _parse_time_of_day(date: dt.date, time_raw: str) -> Optional[dt.datetime]:
 def normalize_forex_factory_rows(
     rows: List[ForexFactoryRawRow],
     event_mapping: EventMapping,
+    acquisition_timestamp_utc: dt.datetime,
     currency_filter: Optional[str] = None,
     source_url: Optional[str] = None,
+    display_timezone: Optional[str] = "America/New_York",
+    display_timezone_verified: bool = False,
+    raw_artifact_checksum: Optional[str] = None,
 ) -> List[MacroEvent]:
-    retrieved_at = now_utc()
+    """`display_timezone` is the assumed Forex Factory viewer timezone
+    (see config/data_sources.yaml `providers.forex_factory.display_timezone`
+    for why "America/New_York" is the documented default, and why it is
+    an ASSUMPTION rather than a CONFIRMED fact). Pass None to disable the
+    assumption entirely and quarantine all timestamps instead.
+
+    `display_timezone_verified` (see the same config's
+    `display_timezone_verified` comment) is an explicit operator
+    attestation: only set True once you've independently confirmed
+    `display_timezone` is correct for this deployment. It's what
+    upgrades a row from ASSUMED to CONFIRMED quality -- and
+    CONFIRMED-only is what precision-sensitive minute-level joins (e.g.
+    macro-release-window checks) should require, never ASSUMED.
+    """
     events: List[MacroEvent] = []
 
     for row in rows:
@@ -208,9 +251,32 @@ def normalize_forex_factory_rows(
 
         naive_dt = _parse_time_of_day(row.date, row.time_raw)
         if naive_dt is None:
-            # "All Day" / "Tentative" releases: anchor to midnight of the
-            # release date, flagged as untrustworthy via ASSUMED_DISPLAY_TIMEZONE.
-            naive_dt = dt.datetime(row.date.year, row.date.month, row.date.day)
+            # "All Day" / "Tentative" releases have no precise instant to
+            # convert, regardless of timezone -- kept distinct from a
+            # genuinely resolved timestamp rather than defaulted to
+            # midnight and passed off as precise.
+            release_ts = None
+            quality = TimestampQuality.TENTATIVE
+        elif display_timezone:
+            result = normalize_timestamp(naive_dt, display_timezone)
+            release_ts = result.utc
+            # CONFIRMED only if the operator has explicitly attested to
+            # verifying display_timezone; otherwise ASSUMED -- a
+            # documented default for an anonymous scraping session is
+            # not the same thing as an independently verified fact.
+            if not result.trusted:
+                quality = TimestampQuality.UNRESOLVED
+            elif display_timezone_verified:
+                quality = TimestampQuality.CONFIRMED
+            else:
+                quality = TimestampQuality.ASSUMED
+        else:
+            release_ts = None
+            quality = TimestampQuality.UNRESOLVED
+
+        actual = parse_value_with_unit(row.actual_raw)
+        forecast = parse_value_with_unit(row.forecast_raw)
+        previous = parse_value_with_unit(row.previous_raw)
 
         events.append(
             MacroEvent(
@@ -218,19 +284,28 @@ def normalize_forex_factory_rows(
                 event_family=mapping.event_family,
                 indicator=mapping.indicator,
                 release_bundle=mapping.release_bundle,
-                release_timestamp_utc=naive_dt.replace(tzinfo=dt.timezone.utc),
+                reference_period=infer_prior_month_reference_period(row.date),
+                release_timestamp_utc=release_ts,
                 release_timestamp_ny=None,
-                actual=_parse_numeric(row.actual_raw),
-                provider_forecast=_parse_numeric(row.forecast_raw),
+                timestamp_quality=quality,
+                actual=actual.value,
+                actual_unit=actual.unit,
+                actual_raw_text=actual.raw_text or None,
+                provider_forecast=forecast.value,
+                provider_forecast_unit=forecast.unit,
+                provider_forecast_raw_text=forecast.raw_text or None,
                 forecast_source="FOREX_FACTORY",
-                previous=_parse_numeric(row.previous_raw),
+                previous=previous.value,
+                previous_unit=previous.unit,
+                previous_raw_text=previous.raw_text or None,
                 importance=row.impact,
                 source=MacroSource.FOREX_FACTORY,
                 source_event_id=None,
                 source_timestamp=naive_dt,
-                source_timezone=ASSUMED_DISPLAY_TIMEZONE,
+                source_timezone=display_timezone if (naive_dt is not None and display_timezone) else "UNKNOWN",
                 source_url=source_url,
-                retrieval_timestamp_utc=retrieved_at,
+                raw_artifact_checksum=raw_artifact_checksum,
+                retrieval_timestamp_utc=acquisition_timestamp_utc,
             )
         )
 
@@ -242,10 +317,22 @@ def normalize_forex_factory_file(
     year: int,
     month: int,
     event_mapping: EventMapping,
+    acquisition_timestamp_utc: dt.datetime,
     currency_filter: Optional[str] = None,
+    display_timezone: Optional[str] = "America/New_York",
+    display_timezone_verified: bool = False,
 ) -> List[MacroEvent]:
+    from ..manifest import checksum_file
+
     html = path.read_text(encoding="utf-8")
     raw_rows = parse_forex_factory_html(html, year, month)
     return normalize_forex_factory_rows(
-        raw_rows, event_mapping, currency_filter=currency_filter, source_url=str(path)
+        raw_rows,
+        event_mapping,
+        acquisition_timestamp_utc,
+        raw_artifact_checksum=checksum_file(path),
+        currency_filter=currency_filter,
+        source_url=str(path),
+        display_timezone=display_timezone,
+        display_timezone_verified=display_timezone_verified,
     )
