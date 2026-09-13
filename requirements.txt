@@ -6,5 +6,8 @@ pyyaml>=6.0,<7
 pandas>=2.0,<3
 pyarrow>=14.0
 python-dateutil>=2.8,<3
+# Pinned to 4.6.1: newer releases (5.x) use PEP 604 `X | None` syntax at
+# module scope, which requires Python 3.10+. This project targets 3.9.
+pandas_market_calendars==4.6.1
 
 pytest>=8.0,<9

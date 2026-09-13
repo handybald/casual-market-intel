@@ -1,0 +1,24 @@
+<!-- FIXTURE PROVENANCE: hand-authored to simulate a page that downloads
+     successfully (long body, mentions "calendar") but whose markup no
+     longer matches the parser's selectors -- e.g. after a Forex Factory
+     site redesign. Used to test that a zero-parsed-row page is REJECTED
+     as a checkpoint, not silently recorded "complete" with rows=0. -->
+<!DOCTYPE html>
+<html>
+<head><title>Economic Calendar - Forex Factory</title></head>
+<body>
+<div class="calendar-wrapper">
+  <p>The calendar markup below intentionally does not match calendar__row
+  selectors, padded to be a plausible page length so the cheap length
+  sanity check alone would not catch it.
+  Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
+  tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim
+  veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+  commodo consequat. Duis aute irure dolor in reprehenderit in voluptate
+  velit esse cillum dolore eu fugiat nulla pariatur.</p>
+  <table class="totally-different-table">
+    <tr><td>Jan 1</td><td>CPI m/m</td><td>0.3%</td></tr>
+  </table>
+</div>
+</body>
+</html>

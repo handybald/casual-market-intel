@@ -1,6 +1,6 @@
 import datetime as dt
 
-from src.data.schemas import MacroEvent, MacroSource
+from src.data.schemas import MacroEvent, MacroSource, TimestampQuality, ValueUnit
 
 
 def _base_event(**overrides) -> MacroEvent:
@@ -9,7 +9,9 @@ def _base_event(**overrides) -> MacroEvent:
         event_family="CPI_MOM",
         indicator="CPI MoM",
         release_timestamp_utc=dt.datetime(2024, 1, 11, 13, 30, tzinfo=dt.timezone.utc),
+        timestamp_quality=TimestampQuality.CONFIRMED,
         actual=0.3,
+        actual_unit=ValueUnit.PERCENT,
         provider_forecast=0.4,
         forecast_source="FOREX_FACTORY",
         previous=0.2,
@@ -28,15 +30,23 @@ def test_provider_forecast_is_not_labeled_economist_consensus():
     assert event.forecast_source == "FOREX_FACTORY"
 
 
-def test_timestamp_trustworthy_true_for_known_timezone():
-    event = _base_event(source_timezone="America/New_York")
-    assert event.timestamp_is_trustworthy is True
+def test_timestamp_trustworthy_true_only_for_confirmed_quality():
+    assert _base_event(timestamp_quality=TimestampQuality.CONFIRMED).timestamp_is_trustworthy is True
+    assert _base_event(timestamp_quality=TimestampQuality.ASSUMED).timestamp_is_trustworthy is False
+    assert _base_event(timestamp_quality=TimestampQuality.TENTATIVE).timestamp_is_trustworthy is False
+    assert _base_event(timestamp_quality=TimestampQuality.UNRESOLVED).timestamp_is_trustworthy is False
 
 
-def test_timestamp_trustworthy_false_for_unknown_or_server():
-    assert _base_event(source_timezone="UNKNOWN").timestamp_is_trustworthy is False
-    assert _base_event(source_timezone="SERVER").timestamp_is_trustworthy is False
-    assert _base_event(source_timezone=None).timestamp_is_trustworthy is False
+def test_unresolved_timestamp_is_quarantined_via_null_release_timestamp():
+    event = _base_event(release_timestamp_utc=None, timestamp_quality=TimestampQuality.UNRESOLVED)
+    assert event.release_timestamp_utc is None
+    assert event.is_quarantined is True
+    assert event.timestamp_is_trustworthy is False
+
+
+def test_resolved_timestamp_is_not_quarantined():
+    event = _base_event()
+    assert event.is_quarantined is False
 
 
 def test_model_dump_roundtrip_via_dict():
@@ -46,6 +56,7 @@ def test_model_dump_roundtrip_via_dict():
     assert rebuilt.event_id == event.event_id
     assert rebuilt.actual == event.actual
     assert rebuilt.source == event.source
+    assert rebuilt.timestamp_quality == event.timestamp_quality
 
 
 def test_optional_fields_default_to_none():
@@ -53,3 +64,16 @@ def test_optional_fields_default_to_none():
     assert event.official_actual is None
     assert event.official_source is None
     assert event.revised_previous is None
+    assert event.reference_period is None
+
+
+def test_value_unit_defaults_to_unknown_when_not_specified():
+    event = _base_event(actual_unit=ValueUnit.UNKNOWN)
+    assert event.actual_unit == ValueUnit.UNKNOWN.value
+
+
+def test_acquisition_and_normalization_time_are_distinct_fields():
+    acquired = dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)
+    event = _base_event(retrieval_timestamp_utc=acquired)
+    assert event.retrieval_timestamp_utc == acquired
+    assert event.normalized_at_utc >= acquired
