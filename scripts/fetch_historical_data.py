@@ -4,17 +4,21 @@
     python scripts/fetch_historical_data.py --start 2016-01-01 --end 2026-09-10
 
 The user specifies ONE date range. Each provider internally determines
-its own safe chunk size (monthly pages for Forex Factory, monthly
-requests -> yearly parquet for Massive, monthly manifest checkpoints for
-MQL5, a full-range refetch for FRED), paginates, retries, rate-limits,
-resumes from data/manifests/fetch_manifest.json, and deduplicates.
-Nothing here loops over months and re-invokes anything manually.
+its own safe chunk size (monthly requests -> yearly parquet for
+Massive, monthly manifest checkpoints for MQL5, a full-range refetch for
+FRED), paginates, retries, rate-limits, resumes from
+data/manifests/fetch_manifest.json, and deduplicates. Nothing here loops
+over months and re-invokes anything manually.
 
-MQL5 is the one source this script cannot fetch itself: the Calendar API
-only runs inside MetaTrader. This script detects and ingests whatever
-mql5_exporter/EconomicCalendarExporter.mq5 has already produced, and
-reports exactly which months are missing rather than pretending to have
-fetched them.
+MQL5 and Forex Factory are the two sources this script cannot fetch
+itself. MQL5's Calendar API only runs inside MetaTrader -- this script
+detects and ingests whatever mql5_exporter/EconomicCalendarExporter.mq5
+has already produced. Forex Factory serves an active Cloudflare managed
+challenge against automated requests (confirmed via a real 403 with
+`cf-mitigated: challenge`) -- historical coverage instead comes from
+`scripts/import_forex_factory.py` importing manually-saved browser
+pages; see `run_forex_factory` below. Both sources report exactly what
+is missing rather than pretending to have fetched it.
 
 EXIT CODE: 0 only if every REQUESTED source completed with no failures
 recorded during THIS run (a source with missing credentials, an
@@ -35,14 +39,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.config import load_config, load_dotenv_if_present
 from src.data.event_mapping import load_event_mapping
-from src.data.manifest import Manifest, utcnow_iso, checksum_file
+from src.data.manifest import Manifest, utcnow_iso
 from src.data.fetch.mql5 import ingest_mql5_calendar, parse_mql5_csv, _row_date
-from src.data.fetch.forex_factory import fetch_forex_factory
 from src.data.fetch.massive import fetch_massive_market_data, MissingCredentialsError as MassiveMissingCreds
 from src.data.validation.market import UnsupportedTimeframeError
 from src.data.fetch.fred import fetch_all_fred_series, MissingCredentialsError as FredMissingCreds
 from src.data.normalize.mql5 import normalize_mql5_rows
-from src.data.normalize.forex_factory import parse_forex_factory_html, normalize_forex_factory_rows
 from src.data.normalize.fred import normalize_fred_official_events
 from src.data.normalize.io import merge_write_events
 from src.data.normalize.market import normalize_market_symbol
@@ -113,48 +115,47 @@ def run_mql5(config, manifest, event_mapping, start, end) -> dict:
 
 
 def run_forex_factory(config, manifest, event_mapping, start, end, force) -> dict:
-    results = fetch_forex_factory(config, manifest, start, end, force=force)
-    total_events = 0
-    for r in results:
-        if r.status not in ("complete", "provisional", "skipped_cached"):
-            continue
-        if not r.path.exists():
-            continue
-        # The ACTUAL acquisition time of this attempt -- not "now". For a
-        # skipped_cached month in particular, the page may have been
-        # fetched on some earlier run; claiming "acquired now" would be
-        # provenance fiction. See fetch/forex_factory.py's pointer design.
-        acquired_at = r.retrieved_at or dt.datetime.now(dt.timezone.utc)
-        ff_provider_cfg = config.provider("forex_factory")
+    """Historical Forex Factory data is NOT fetched live here anymore.
+    forexfactory.com serves an active Cloudflare managed challenge
+    against automated requests (confirmed: a plain `requests` GET to
+    /calendar gets a 403 with `cf-mitigated: challenge`, a "Just a
+    moment..." JS-verification page -- reproduced with the exact same
+    request this pipeline used to send) -- retrying that on every
+    bootstrap/update run would just record an identical, deterministic
+    403 forever, never actually collecting anything.
 
-        # A fetched/cached month page always covers the FULL calendar
-        # month (see fetch/forex_factory.py) even when this run's
-        # requested [start, end] only clips to part of it -- filter raw
-        # rows to the requested range BEFORE normalizing, so normalized
-        # output never silently includes days outside what was asked
-        # for. Filtering at the raw-row level (not on the resulting
-        # MacroEvent) works even for TENTATIVE/quarantined rows, whose
-        # release_timestamp_utc is None.
-        html = r.path.read_text(encoding="utf-8")
-        raw_rows = parse_forex_factory_html(html, r.year, r.month)
-        in_range_rows = [row for row in raw_rows if start <= row.date <= end]
+    Historical coverage instead comes entirely from
+    `scripts/import_forex_factory.py`, which a human runs after manually
+    saving calendar pages from their own browser into
+    data/raw/forex_factory_downloads/ -- that importer ALREADY writes
+    normalized events directly into forex_factory_events.parquet at
+    import time, so this function's only job is to VERIFY what the
+    manifest (populated by that importer) says is covered for
+    [start, end] and clearly report any gap, never to fetch or
+    re-normalize anything itself. `force` is accepted for call-site
+    compatibility with the other `run_*` functions but has no effect --
+    there is nothing here a flag could force a retry of.
+    """
+    from src.data.fetch.forex_factory import MANIFEST_KEY as FF_MANIFEST_KEY
 
-        events = normalize_forex_factory_rows(
-            in_range_rows, event_mapping, acquired_at,
-            currency_filter=config.macro_currency,
-            source_url=str(r.path),
-            display_timezone=ff_provider_cfg.get("display_timezone", "America/New_York"),
-            display_timezone_verified=bool(ff_provider_cfg.get("display_timezone_verified", False)),
-            raw_artifact_checksum=checksum_file(r.path),
-        )
-        merge_write_events(events, config.interim_root / "macro" / "forex_factory_events.parquet")
-        total_events += len(events)
-    failed = [r for r in results if r.status == "failed"]
+    gaps = manifest.coverage_gaps("forex_factory", FF_MANIFEST_KEY, start, end)
+    if gaps:
+        for gap_start, gap_end in gaps:
+            logger.warning(
+                "[ForexFactory] historical coverage MISSING for %s -> %s -- Forex Factory is no "
+                "longer fetched live (forexfactory.com blocks automated requests). Save the "
+                "calendar page(s) for this range in your own browser, add them under "
+                "data/raw/forex_factory_downloads/<year>/, then run: "
+                "python scripts/import_forex_factory.py data/raw/forex_factory_downloads",
+                gap_start, gap_end,
+            )
+    watermark = manifest.completion_watermark("forex_factory", FF_MANIFEST_KEY, start)
     return {
-        "months_processed": len(results),
-        "failed_months": len(failed),
-        "normalized_events": total_events,
-        "ok": len(failed) == 0,
+        "requested_start": start.isoformat(),
+        "requested_end": end.isoformat(),
+        "coverage_gaps": [f"{g[0]} -> {g[1]}" for g in gaps],
+        "watermark": watermark.isoformat() if watermark else None,
+        "ok": len(gaps) == 0,
     }
 
 
