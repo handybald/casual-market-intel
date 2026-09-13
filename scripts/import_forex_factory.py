@@ -108,6 +108,7 @@ from src.data.fetch.forex_factory import (
 )
 from src.data.normalize.forex_factory import (
     ForexFactoryRawRow,
+    decode_html_bytes,
     normalize_forex_factory_rows,
     parse_forex_factory_day_dates,
     parse_forex_factory_html,
@@ -327,7 +328,14 @@ def import_file(
         )
 
     try:
-        html = raw_bytes.decode("utf-8", errors="replace")
+        # Decode according to the page's own declared charset (falling
+        # back through UTF-8 -> CP1252 -> Latin-1, never errors="replace"
+        # as the normal path -- see decode_html_bytes) so the parser
+        # sees real text, never silently-destroyed provenance-sensitive
+        # characters. This ONLY affects what the parser reads: the
+        # archived raw artifact below always writes `raw_bytes`
+        # verbatim, never a re-encoding of this decoded string.
+        html = decode_html_bytes(raw_bytes)
 
         sanity_error = _cheap_sanity_check(html)
         if sanity_error:
@@ -374,8 +382,15 @@ def import_file(
 
             _month_dir(raw_dir, year, month).mkdir(parents=True, exist_ok=True)
             attempt_path = _attempt_path(raw_dir, year, month, retrieved_at)
-            attempt_path.write_text(html, encoding="utf-8")
-            month_checksum = checksum_bytes(html.encode("utf-8"))
+            # Archive the ORIGINAL bytes verbatim -- never html.encode(),
+            # which would silently re-encode a Windows-1252 (or any
+            # non-UTF-8) source page into a DIFFERENT byte sequence than
+            # what the user actually downloaded, corrupting the "raw"
+            # artifact's provenance. `checksum` (outer scope) was already
+            # computed from these exact same `raw_bytes` and is identical
+            # for every month this one file touches, since the same
+            # unmodified bytes are written to each.
+            attempt_path.write_bytes(raw_bytes)
 
             if is_full_month:
                 start = dt.date(year, month, 1).isoformat()
@@ -389,14 +404,14 @@ def import_file(
             manifest.record(
                 ManifestEntry(
                     provider="forex_factory", key=MANIFEST_KEY, start=start, end=end, status=status,
-                    rows=len(month_rows), checksum=month_checksum, path=str(attempt_path),
+                    rows=len(month_rows), checksum=checksum, path=str(attempt_path),
                     request_meta={
                         "acquisition": "manual_browser_download", "import_source": str(path),
                         "parsing_mode": parsing_mode, "timezone_name": timezone_name,
                     },
                 )
             )
-            _write_pointer(raw_dir, year, month, attempt_path, retrieved_at, month_checksum, len(month_rows))
+            _write_pointer(raw_dir, year, month, attempt_path, retrieved_at, checksum, len(month_rows))
             months_recorded.append((year, month))
 
             events = normalize_forex_factory_rows(
@@ -404,7 +419,7 @@ def import_file(
                 currency_filter=config.macro_currency, source_url=str(attempt_path),
                 display_timezone=timezone_name,
                 display_timezone_verified=bool(ff_provider_cfg.get("display_timezone_verified", False)),
-                raw_artifact_checksum=month_checksum,
+                raw_artifact_checksum=checksum,
             )
             merge_write_events(events, config.interim_root / "macro" / "forex_factory_events.parquet")
 
@@ -428,7 +443,14 @@ def import_file(
         return ImportFileResult(path, "refused", checksum=checksum, reason=f"unexpected error: {exc}")
 
 
-def _print_gap_report(manifest: Manifest, results: List[ImportFileResult], report_start: Optional[dt.date], report_end: Optional[dt.date]) -> bool:
+def _sum_stat(entries, key: str) -> int:
+    return sum(int(e.get(key, 0) or 0) for e in entries)
+
+
+def _print_gap_report(
+    manifest: Manifest, import_log: Dict[str, dict], results: List[ImportFileResult],
+    report_start: Optional[dt.date], report_end: Optional[dt.date],
+) -> bool:
     imported = [r for r in results if r.status == "imported"]
     skipped = [r for r in results if r.status == "skipped_unchanged"]
     refused = [r for r in results if r.status == "refused"]
@@ -442,14 +464,7 @@ def _print_gap_report(manifest: Manifest, results: List[ImportFileResult], repor
     overall_start = report_start or (min(all_starts) if all_starts else None)
     overall_end = report_end or (max(all_ends) if all_ends else None)
 
-    total_events = sum(r.stats.get("event_count", 0) for r in imported)
-    total_usd = sum(r.stats.get("usd_event_count", 0) for r in imported)
-    total_mapped = sum(r.stats.get("mapped_usd_event_count", 0) for r in imported)
-    total_forecast = sum(r.stats.get("forecast_count", 0) for r in imported)
-    total_actual = sum(r.stats.get("actual_count", 0) for r in imported)
-    total_revision = sum(r.stats.get("revision_count", 0) for r in imported)
-
-    unmapped_all = sorted({name for r in imported for name in r.unmapped_names})
+    unmapped_this_run = sorted({name for r in imported for name in r.unmapped_names})
 
     print("\n" + "=" * 60)
     print("FOREX FACTORY HISTORICAL IMPORT")
@@ -469,15 +484,42 @@ def _print_gap_report(manifest: Manifest, results: List[ImportFileResult], repor
     else:
         print("Actual coverage: NONE -- nothing imported and nothing previously recorded")
 
+    # THIS RUN's own numbers -- only what was actually (re)parsed just
+    # now. On an idempotent re-run where every file is already
+    # up to date, these are all legitimately 0/empty: nothing NEW
+    # happened. Kept strictly separate from the cumulative totals below
+    # (persisted in forex_factory_import_log.json across every run ever
+    # made) so "nothing changed this run" is never confused with
+    # "nothing has ever been imported".
     print()
-    print(f"Events parsed: {total_events}")
-    print(f"USD events: {total_usd}")
-    print(f"Mapped macro events: {total_mapped}")
-    print(f"Forecast observations: {total_forecast}")
-    print(f"Actual observations: {total_actual}")
-    print(f"Revision observations: {total_revision}")
-    if unmapped_all:
-        print(f"Unmapped USD event names ({len(unmapped_all)}): see forex_factory_unmapped_events.txt")
+    print("-- This run --")
+    print(f"Events parsed: {_sum_stat((r.stats for r in imported), 'event_count')}")
+    print(f"USD events: {_sum_stat((r.stats for r in imported), 'usd_event_count')}")
+    print(f"Mapped macro events: {_sum_stat((r.stats for r in imported), 'mapped_usd_event_count')}")
+    print(f"Forecast observations: {_sum_stat((r.stats for r in imported), 'forecast_count')}")
+    print(f"Actual observations: {_sum_stat((r.stats for r in imported), 'actual_count')}")
+    print(f"Revision observations: {_sum_stat((r.stats for r in imported), 'revision_count')}")
+    if unmapped_this_run:
+        print(f"Unmapped USD event names this run ({len(unmapped_this_run)}): see forex_factory_unmapped_events.txt")
+
+    # CUMULATIVE totals -- every file ever successfully imported,
+    # sourced from the persisted import log (data/manifests/
+    # forex_factory_import_log.json), not just this invocation's
+    # results. On a fully idempotent re-run (everything "skipped
+    # unchanged") this is the only place the true dataset-wide numbers
+    # are visible.
+    log_entries = list(import_log.values())
+    unmapped_cumulative = sorted({name for e in log_entries for name in e.get("unmapped_event_names", [])})
+    print()
+    print(f"-- Cumulative (forex_factory_import_log.json, {len(log_entries)} file(s) ever imported) --")
+    print(f"Events parsed: {_sum_stat(log_entries, 'event_count')}")
+    print(f"USD events: {_sum_stat(log_entries, 'usd_event_count')}")
+    print(f"Mapped macro events: {_sum_stat(log_entries, 'mapped_usd_event_count')}")
+    print(f"Forecast observations: {_sum_stat(log_entries, 'forecast_count')}")
+    print(f"Actual observations: {_sum_stat(log_entries, 'actual_count')}")
+    print(f"Revision observations: {_sum_stat(log_entries, 'revision_count')}")
+    if unmapped_cumulative:
+        print(f"Unmapped USD event names, cumulative ({len(unmapped_cumulative)}): see forex_factory_unmapped_events.txt")
 
     print()
     if gaps:
@@ -491,8 +533,8 @@ def _print_gap_report(manifest: Manifest, results: List[ImportFileResult], repor
     return len(refused) == 0 and len(gaps) == 0
 
 
-def _write_unmapped_report(config, results: List[ImportFileResult]) -> None:
-    unmapped_all = sorted({name for r in results for name in r.unmapped_names})
+def _write_unmapped_report(config, import_log: Dict[str, dict]) -> None:
+    unmapped_all = sorted({name for e in import_log.values() for name in e.get("unmapped_event_names", [])})
     if not unmapped_all:
         return
     report_path = config.manifest_path.parent / "forex_factory_unmapped_events.txt"
@@ -541,15 +583,21 @@ def main(argv=None) -> int:
                 "coverage_start": result.coverage_start.isoformat() if result.coverage_start else None,
                 "coverage_end": result.coverage_end.isoformat() if result.coverage_end else None,
                 "months_recorded": [f"{y:04d}-{m:02d}" for y, m in result.months_recorded],
+                "unmapped_event_names": result.unmapped_names,
                 **result.stats,
             }
         elif result.status == "refused":
             logger.error("[Import] %s REFUSED: %s", path, result.reason)
 
     _save_import_log(config, import_log)
-    _write_unmapped_report(config, results)
+    # Cumulative, not just this run's `results` -- on an idempotent
+    # re-run where everything is "skipped unchanged", `results` has no
+    # newly-imported files at all; sourcing this report from the
+    # persisted log instead means a no-op re-run never erases the
+    # previously-known unmapped-event list.
+    _write_unmapped_report(config, import_log)
 
-    ok = _print_gap_report(manifest, results, range_start, range_end)
+    ok = _print_gap_report(manifest, import_log, results, range_start, range_end)
     return 0 if ok else 1
 
 

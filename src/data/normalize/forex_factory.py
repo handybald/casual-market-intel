@@ -326,6 +326,69 @@ def parse_forex_factory_day_dates(html: str, display_timezone: str = "America/Ne
     return sorted(dates)
 
 
+_META_CHARSET_RE = re.compile(rb'<meta[^>]+?charset\s*=\s*["\']?\s*([a-zA-Z0-9_-]+)', re.IGNORECASE)
+_META_HTTP_EQUIV_CHARSET_RE = re.compile(
+    rb'<meta[^>]+?http-equiv\s*=\s*["\']content-type["\'][^>]*?content\s*=\s*["\'][^"\']*?charset\s*=\s*([a-zA-Z0-9_-]+)',
+    re.IGNORECASE,
+)
+
+
+def detect_declared_charset(raw_bytes: bytes) -> Optional[str]:
+    """Sniffs an HTML5 `<meta charset="...">` or legacy `<meta
+    http-equiv="Content-Type" content="...;charset=...">` declaration
+    from the first 2048 bytes -- the same window the HTML5 spec's own
+    encoding-sniffing algorithm looks in. Pure byte-level regex, so it
+    works correctly regardless of what the real encoding turns out to
+    be: the declaration itself (element/attribute names, the charset
+    label) is always plain ASCII in every encoding this project needs
+    to support (UTF-8, Windows-1252), so matching it as raw bytes never
+    depends on already knowing the encoding. Returns None if no
+    declaration is found -- callers must not guess a specific encoding
+    themselves in that case, only try progressively safer generic
+    fallbacks (see decode_html_bytes)."""
+    head = raw_bytes[:2048]
+    match = _META_CHARSET_RE.search(head) or _META_HTTP_EQUIV_CHARSET_RE.search(head)
+    if not match:
+        return None
+    return match.group(1).decode("ascii", errors="ignore")
+
+
+def decode_html_bytes(raw_bytes: bytes) -> str:
+    """Decodes a saved HTML page's raw bytes into text WITHOUT ever
+    silently replacing characters when a real decoding exists.
+    `bytes.decode("utf-8", errors="replace")` (the prior behavior) can
+    turn valid Windows-1252 punctuation (curly quotes, en/em dashes,
+    accented letters -- exactly the provenance-sensitive text this
+    project cares about) into U+FFFD replacement characters, destroying
+    information the raw bytes never actually lost.
+
+    Order: the page's own declared charset (strict) -> UTF-8 (strict --
+    this project's own default, and the common case even when
+    undeclared) -> Windows-1252/CP1252 (strict -- the other encoding
+    this project explicitly supports) -> Latin-1 (ISO-8859-1), which
+    maps every one of the 256 possible byte values to a code point 1:1
+    and therefore NEVER raises -- the true last resort, reached only if
+    every named encoding above failed, and still fully reversible (no
+    information discarded) unlike errors="replace".
+
+    This function decides only how to get a STRING for the parser to
+    read -- it has no bearing on what gets archived as the raw artifact
+    (see scripts/import_forex_factory.py, which always writes the
+    original `raw_bytes` verbatim, never a re-encoding of this
+    function's return value).
+    """
+    declared = detect_declared_charset(raw_bytes)
+    candidates = ([declared] if declared else []) + ["utf-8", "cp1252"]
+
+    for encoding in candidates:
+        try:
+            return raw_bytes.decode(encoding, errors="strict")
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    return raw_bytes.decode("latin-1")
+
+
 _TIMEZONE_NAME_RE = re.compile(r"timezone_name:\s*'([^']+)'")
 
 

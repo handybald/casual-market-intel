@@ -126,7 +126,17 @@ def _import_one(config, manifest, event_mapping, path, today=dt.date(2026, 1, 1)
     log = importer._load_import_log(config)
     result = importer.import_file(config, manifest, event_mapping, log, path, today, **kwargs)
     if result.status == "imported" and result.checksum:
-        log[result.checksum] = {"path": str(path)}
+        # Mirrors main()'s own log-entry construction so tests exercise
+        # the same persisted shape (unmapped_event_names, stats, etc.)
+        # the real CLI produces.
+        log[result.checksum] = {
+            "path": str(path),
+            "coverage_start": result.coverage_start.isoformat() if result.coverage_start else None,
+            "coverage_end": result.coverage_end.isoformat() if result.coverage_end else None,
+            "months_recorded": [f"{y:04d}-{m:02d}" for y, m in result.months_recorded],
+            "unmapped_event_names": result.unmapped_names,
+            **result.stats,
+        }
     importer._save_import_log(config, log)
     return result
 
@@ -360,8 +370,9 @@ def test_unmapped_report_file_written(tmp_path, event_mapping):
     html_path = tmp_path / "a.html"
     html_path.write_text(_page(days), encoding="utf-8")
 
-    result = _import_one(config, manifest, event_mapping, html_path)
-    importer._write_unmapped_report(config, [result])
+    _import_one(config, manifest, event_mapping, html_path)
+    log = importer._load_import_log(config)
+    importer._write_unmapped_report(config, log)
     report_path = config.manifest_path.parent / "forex_factory_unmapped_events.txt"
     assert report_path.exists()
     assert "Some Totally Unmapped USD Release" in report_path.read_text(encoding="utf-8")
