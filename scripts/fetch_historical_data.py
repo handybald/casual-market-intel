@@ -70,6 +70,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--symbols", type=str, default=None, help="comma-separated symbols override for Massive")
     parser.add_argument("--force", action="store_true", help="re-fetch even if manifest says complete")
+    parser.add_argument("--mql5-input-csv", help="MQL5 export CSV to ingest")
+    parser.add_argument("--macro-country", help="override macro country for this run")
+    parser.add_argument("--macro-currency", help="override macro currency for this run")
     return parser.parse_args(argv)
 
 
@@ -222,6 +225,7 @@ def main(argv=None) -> int:
     manifest = Manifest(config.manifest_path)
 
     args = parse_args(argv)
+    config = config.with_mql5_overrides(args.mql5_input_csv, args.macro_country, args.macro_currency)
     sources = validate_sources([s.strip() for s in args.sources.split(",") if s.strip()])
 
     start = dt.date.fromisoformat(args.start) if args.start else config.start_date

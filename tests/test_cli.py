@@ -256,3 +256,19 @@ def test_forex_factory_bootstrap_reports_success_once_imported(isolated_bootstra
 
     code = bootstrap.main(["--sources", "forex_factory", "--start", "2024-01-01", "--end", "2024-01-10"])
     assert code == 0
+
+
+def test_mql5_cli_overrides_reach_ingestion_without_mutating_config(isolated_bootstrap, monkeypatch, tmp_path):
+    original = isolated_bootstrap
+    old_path = original.provider("mql5")["input_csv"]
+    custom_path = str(tmp_path / "custom calendar.csv")
+    seen = []
+    def capture(config, *args):
+        seen.append((config.provider("mql5")["input_csv"], config.macro_country, config.macro_currency))
+        return {"ok": True}
+    monkeypatch.setattr(bootstrap, "run_mql5", capture)
+    assert bootstrap.main(["--sources", "mql5", "--start", "2025-09-01", "--end", "2025-09-30",
+                           "--mql5-input-csv", custom_path, "--macro-country", "GB", "--macro-currency", "GBP"]) == 0
+    assert seen == [(custom_path, "GB", "GBP")]
+    assert original.provider("mql5")["input_csv"] == old_path
+    assert (original.macro_country, original.macro_currency) == ("US", "USD")

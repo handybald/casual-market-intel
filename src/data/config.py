@@ -6,6 +6,7 @@ imports from here instead of re-reading YAML.
 """
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import os
 from pathlib import Path
@@ -24,6 +25,17 @@ class AppConfig:
     def __init__(self, raw: Dict[str, Any], config_path: Path):
         self._raw = raw
         self._config_path = config_path
+
+    def with_mql5_overrides(self, input_csv=None, country=None, currency=None):
+        """Return a run-specific config without changing the saved configuration."""
+        raw = copy.deepcopy(self._raw)
+        if input_csv is not None:
+            raw["providers"]["mql5"]["input_csv"] = str(input_csv)
+        if country is not None:
+            raw["macro"]["country"] = country
+        if currency is not None:
+            raw["macro"]["currency"] = currency
+        return AppConfig(raw, self._config_path)
 
     # -- top level -----------------------------------------------------
     @property
