@@ -298,6 +298,11 @@ def build_set_file(start: dt.date, end: dt.date, country: str, currency: str, ou
     ])
 
 
+def encode_set_file(text: str) -> bytes:
+    """MetaTrader presets are Windows Unicode: UTF-16 LE with a BOM."""
+    return b"\xff\xfe" + text.encode("utf-16-le")
+
+
 def build_startup_ini(set_name: str, keep_open: bool) -> str:
     return "\r\n".join([
         "[StartUp]",
@@ -311,11 +316,9 @@ def build_startup_ini(set_name: str, keep_open: bool) -> str:
 
 
 def build_launch_command(install: Mt5Install, ini_path: Path) -> List[str]:
-    data_folder = ini_path.parent.parent
-    cmd = [str(install.wine), str(install.terminal), f"/config:{windows_path(install, ini_path)}"]
-    if data_folder.resolve() == install.install_dir.resolve():
-        cmd.append("/portable")
-    return cmd
+    # Deliberately NO `/portable`: verified on the real install that appending it makes MT5
+    # log `cannot load config "...ini""` at start, ignore the startup script and idle forever.
+    return [str(install.wine), str(install.terminal), f"/config:{windows_path(install, ini_path)}"]
 
 
 # --------------------------------------------------------------------------
@@ -371,6 +374,35 @@ def read_journal_since(data_folder: Path, offsets: Dict[str, int]) -> List[str]:
     return lines
 
 
+def terminal_log_offsets(data_folder: Path) -> Dict[str, int]:
+    logs = data_folder / "logs"
+    return {p.name: p.stat().st_size for p in logs.glob("*.log")} if logs.is_dir() else {}
+
+
+def terminal_startup_problem(data_folder: Path, offsets: Dict[str, int]) -> Optional[str]:
+    """A terminal-journal (`logs/*.log`) line, new since launch, saying the startup config or
+    script could not be loaded. Without this the runner would wait for the full timeout on a
+    terminal that came up idle."""
+    logs = data_folder / "logs"
+    if not logs.is_dir():
+        return None
+    for p in sorted(logs.glob("*.log")):
+        start = offsets.get(p.name, 0)
+        start -= start % 2
+        try:
+            with open(p, "rb") as fh:
+                fh.seek(start)
+                chunk = fh.read()
+        except OSError:
+            continue
+        text = chunk[: len(chunk) - (len(chunk) % 2)].decode("utf-16-le", errors="replace")
+        for line in text.splitlines():
+            low = line.lower()
+            if "cannot load config" in low or "failed to load script" in low or "cannot load script" in low:
+                return line.split("\t")[-1].strip()
+    return None
+
+
 def journal_verdict(lines: Sequence[str]) -> Tuple[bool, Optional[str]]:
     """(done, failure_reason). `done` means the exporter printed its terminal DONE line."""
     done = any("[MQL5 Exporter] DONE" in l for l in lines)
@@ -383,12 +415,22 @@ def journal_verdict(lines: Sequence[str]) -> Tuple[bool, Optional[str]]:
 # --------------------------------------------------------------------------
 # Terminal launch / wait
 # --------------------------------------------------------------------------
+def terminal_process_lines(ps_output: str) -> List[str]:
+    """`ps -axo comm=` lines naming a terminal64.exe executable.
+
+    Matches the process EXECUTABLE (Wine reports the full exe path as `comm`), never a
+    command line that merely mentions the name -- `pgrep -f` also matched unrelated shells
+    whose text contained "terminal64.exe" and made the runner refuse to start.
+    """
+    return [l for l in ps_output.splitlines() if l.strip().lower().endswith("terminal64.exe")]
+
+
 def terminal_running() -> bool:
     try:
-        out = subprocess.run(["pgrep", "-fi", "terminal64.exe"], stdout=subprocess.PIPE, text=True).stdout
+        out = subprocess.run(["ps", "-axo", "comm="], stdout=subprocess.PIPE, text=True).stdout
     except OSError:
         return False
-    return any(l.strip() for l in out.splitlines())
+    return bool(terminal_process_lines(out))
 
 
 def _terminate(proc: "subprocess.Popen") -> None:
@@ -408,7 +450,8 @@ def _terminate(proc: "subprocess.Popen") -> None:
 
 def run_terminal(install: Mt5Install, data_folder: Path, cmd: List[str], offsets: Dict[str, int],
                  timeout: int, keep_open: bool, poll: float = 1.0,
-                 popen: Callable[..., "subprocess.Popen"] = subprocess.Popen) -> None:
+                 popen: Callable[..., "subprocess.Popen"] = subprocess.Popen,
+                 terminal_offsets: Optional[Dict[str, int]] = None) -> None:
     """Launch the terminal and block until the exporter finishes; raise RunnerError otherwise."""
     proc = popen(cmd, env=wine_env(install), cwd=str(install.install_dir), start_new_session=True,
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -428,6 +471,11 @@ def run_terminal(install: Mt5Install, data_folder: Path, cmd: List[str], offsets
                 log(f"terminal64.exe exit status {rc} ignored: the exporter reported a clean DONE "
                     "(MT5 returns the script's last error code on shutdown)")
             return
+        if terminal_offsets is not None:
+            problem = terminal_startup_problem(data_folder, terminal_offsets)
+            if problem:
+                _terminate(proc)
+                raise RunnerError(f"MetaTrader did not start the exporter: {problem}")
         done, _ = journal_verdict(read_journal_since(data_folder, offsets))
         if done and done_at is None:
             done_at = time.monotonic()
@@ -602,18 +650,23 @@ def run(args: argparse.Namespace) -> int:
     set_path = presets / SET_FILE_NAME
     ini_path = data_folder / "config" / "cli_export_startup.ini"
     ini_path.parent.mkdir(exist_ok=True)
-    set_path.write_bytes(build_set_file(start, end, args.country, args.currency, args.output_file).encode("ascii"))
+    set_path.write_bytes(encode_set_file(build_set_file(start, end, args.country, args.currency, args.output_file)))
     ini_path.write_bytes(build_startup_ini(SET_FILE_NAME, args.keep_terminal_open).encode("ascii"))
 
     csv_path = files_dir / args.output_file
     sidecar = csv_path.with_name(csv_path.name + f".windows.v{MQL5_EXPORT_SCHEMA_VERSION}.csv")
     before = {"csv": fingerprint(csv_path), "sidecar": fingerprint(sidecar)}
     offsets = journal_offsets(data_folder)
+    terminal_offsets = terminal_log_offsets(data_folder)
 
+    log(f"Preset: {set_path} (UTF-16 LE + BOM)")
+    log(f"Requested inputs: StartDate={start} (epoch {date_to_epoch(start)}), EndDate={end} "
+        f"(epoch {date_to_epoch(end)}), CountryCode={args.country}, CurrencyCode={args.currency}, "
+        f"OutputFile={args.output_file}")
     log(f"Launching export {start} -> {end}")
     try:
         run_terminal(install, data_folder, build_launch_command(install, ini_path), offsets,
-                     args.timeout_seconds, args.keep_terminal_open)
+                     args.timeout_seconds, args.keep_terminal_open, terminal_offsets=terminal_offsets)
     finally:
         ini_path.unlink(missing_ok=True)
     log("Waiting for output...")

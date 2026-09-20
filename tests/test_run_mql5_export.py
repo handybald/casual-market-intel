@@ -235,6 +235,16 @@ def test_set_file():
                               "CurrencyCode=USD", "OutputFile=us_macro_calendar.csv"]
 
 
+def test_set_file_encoding_bom_and_roundtrip():
+    text = r.build_set_file(D(2025, 9, 1), D(2025, 9, 30), "US", "USD", "us_macro_calendar.csv")
+    raw = r.encode_set_file(text)
+    assert raw[:2] == b"\xff\xfe"
+    assert raw.decode("utf-16") == text  # BOM-aware decode round-trips
+    params = dict(l.split("=", 1) for l in raw.decode("utf-16").splitlines() if l)
+    assert params == {"StartDate": "1756684800", "EndDate": "1759190400", "CountryCode": "US",
+                      "CurrencyCode": "USD", "OutputFile": "us_macro_calendar.csv"}
+
+
 def test_startup_ini():
     ini = r.build_startup_ini("x.set", keep_open=False).splitlines()
     assert ini[0] == "[StartUp]"
@@ -243,11 +253,23 @@ def test_startup_ini():
     assert "ShutdownTerminal=0" in r.build_startup_ini("x.set", keep_open=True)
 
 
+def test_launch_command_never_adds_portable(tmp_path):
+    inst = install_obj(tmp_path)  # portable-layout install: data folder == install dir
+    assert "/portable" not in r.build_launch_command(inst, inst.install_dir / "config/cli.ini")
+
+
 def test_launch_command(tmp_path):
     inst = install_obj(tmp_path)
     cmd = r.build_launch_command(inst, inst.install_dir / "config/cli.ini")
     assert cmd[1].endswith("terminal64.exe")
     assert cmd[2] == r"/config:C:\Program Files\MetaTrader 5\config\cli.ini"
+
+
+def test_terminal_process_matching_ignores_shells_mentioning_the_name():
+    ps = "\n".join(["/bin/zsh", "/usr/bin/pkill",
+                    "/Users/u/Library/Application Support/x/drive_c/Program Files/MetaTrader 5/terminal64.exe"])
+    assert len(r.terminal_process_lines(ps)) == 1
+    assert r.terminal_process_lines("/bin/zsh\n/usr/bin/vim notes-terminal64.exe.txt") == []
 
 
 # ---- journal ----
@@ -330,6 +352,30 @@ def test_run_terminal_nonzero_exit_with_failed_windows(tmp_path):
     with pytest.raises(r.RunnerError):
         r.run_terminal(inst, inst.install_dir, ["x"], {}, timeout=5, keep_open=False, poll=0,
                        popen=lambda *a, **k: FakeProc([4]))
+
+
+def test_run_terminal_fails_fast_when_config_cannot_load(tmp_path, monkeypatch):
+    inst = install_obj(tmp_path)
+    write_journal(inst.install_dir / "x", "z.log", [])  # unrelated dir, ignored
+    logs = inst.install_dir / "logs"
+    logs.mkdir()
+    text = 'XX\t2\t23:40:05.039\tTerminal\tcannot load config "C:\\a.ini"" at start\r\n'
+    (logs / "d.log").write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+    proc = FakeProc([None])
+    monkeypatch.setattr(r, "_terminate", lambda p: setattr(p, "terminated", True))
+    with pytest.raises(r.RunnerError, match="did not start the exporter: .*cannot load config"):
+        r.run_terminal(inst, inst.install_dir, ["x"], {}, timeout=60, keep_open=False, poll=0,
+                       popen=lambda *a, **k: proc, terminal_offsets={})
+    assert proc.terminated
+
+
+def test_terminal_startup_problem_ignores_old_lines(tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    text = 'XX\t2\t1\tTerminal\tcannot load config "a" at start\r\n'
+    (logs / "d.log").write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+    assert r.terminal_startup_problem(tmp_path, {}) is not None
+    assert r.terminal_startup_problem(tmp_path, r.terminal_log_offsets(tmp_path)) is None
 
 
 def test_run_terminal_keep_open_returns_on_done(tmp_path):
@@ -522,9 +568,9 @@ def test_empty_compiler_artifact_rejected(tmp_path):
         r.compile_exporter(inst, inst.install_dir, run=compile_empty)
 
 
-def test_launch_portable_and_normal(tmp_path):
+def test_launch_never_portable_and_data_folder_validation(tmp_path):
     inst = install_obj(tmp_path)
-    assert "/portable" in r.build_launch_command(inst, inst.install_dir / "config/cli.ini")
+    assert "/portable" not in r.build_launch_command(inst, inst.install_dir / "config/cli.ini")
     data = _hash_dir(inst, "u", "ABC")
     assert "/portable" not in r.build_launch_command(inst, data / "config/cli.ini")
     arbitrary = tmp_path / "arbitrary"
