@@ -4,11 +4,23 @@
 # `event_family` is the canonical key used everywhere downstream
 # (normalized schema, event bundles, validation joins).
 #
+# `value_unit` is the canonical ValueUnit every source's numbers for this family are
+# expressed in (PERCENT = percentage points as published, e.g. 0.3 == 0.3%;
+# THOUSANDS = thousands of persons, e.g. 22 == 22K). A provider value is only ever
+# labelled with this unit when the provider's own metadata establishes it:
+#   - PERCENT: MQL5 unit == PERCENT.
+#   - `mql5_unit_rule`: an explicit MQL5 (unit, multiplier) pair whose exported
+#     numeric value is already expressed in `value_unit`. Nonfarm Payrolls are
+#     exported by MQL5 as unit=JOB, multiplier=THOUSANDS, value=22 meaning 22K
+#     persons (the exporter only divides MQL5's fixed-point storage by 1e6; the
+#     multiplier is NOT applied on top).
+#
 # `release_bundle` groups events that are published simultaneously and
 # should be treated as one information event by later modeling stages.
 
 CPI_MOM:
   indicator: "CPI MoM"
+  value_unit: "PERCENT"
   release_bundle: "CPI"
   mql5:
     - "CPI m/m"
@@ -17,6 +29,7 @@ CPI_MOM:
 
 CPI_YOY:
   indicator: "CPI YoY"
+  value_unit: "PERCENT"
   release_bundle: "CPI"
   mql5:
     - "CPI y/y"
@@ -25,6 +38,7 @@ CPI_YOY:
 
 CORE_CPI_MOM:
   indicator: "Core CPI MoM"
+  value_unit: "PERCENT"
   release_bundle: "CPI"
   mql5:
     - "Core CPI m/m"
@@ -33,6 +47,7 @@ CORE_CPI_MOM:
 
 CORE_CPI_YOY:
   indicator: "Core CPI YoY"
+  value_unit: "PERCENT"
   release_bundle: "CPI"
   mql5:
     - "Core CPI y/y"
@@ -41,6 +56,10 @@ CORE_CPI_YOY:
 
 NFP:
   indicator: "Nonfarm Payrolls"
+  value_unit: "THOUSANDS"
+  mql5_unit_rule:
+    unit: "JOB"
+    multiplier: "THOUSANDS"
   release_bundle: "EMPLOYMENT"
   mql5:
     - "Nonfarm Payrolls"
@@ -49,6 +68,7 @@ NFP:
 
 UNEMPLOYMENT_RATE:
   indicator: "Unemployment Rate"
+  value_unit: "PERCENT"
   release_bundle: "EMPLOYMENT"
   mql5:
     - "Unemployment Rate"
@@ -57,6 +77,7 @@ UNEMPLOYMENT_RATE:
 
 AVG_HOURLY_EARNINGS_MOM:
   indicator: "Average Hourly Earnings MoM"
+  value_unit: "PERCENT"
   release_bundle: "EMPLOYMENT"
   mql5:
     - "Average Hourly Earnings m/m"
@@ -65,6 +86,7 @@ AVG_HOURLY_EARNINGS_MOM:
 
 AVG_HOURLY_EARNINGS_YOY:
   indicator: "Average Hourly Earnings YoY"
+  value_unit: "PERCENT"
   release_bundle: "EMPLOYMENT"
   mql5:
     - "Average Hourly Earnings y/y"

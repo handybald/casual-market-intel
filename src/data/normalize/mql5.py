@@ -36,8 +36,17 @@ logger = logging.getLogger(__name__)
 _PERCENT_UNITS = {"PERCENT"}
 
 
-def _unit_for(mql5_unit: str) -> ValueUnit:
-    return ValueUnit.PERCENT if mql5_unit in _PERCENT_UNITS else ValueUnit.UNKNOWN
+def _unit_for(row: Mql5Row, mapping) -> ValueUnit:
+    """PERCENT via MQL5's own PERCENT unit; otherwise ONLY through an explicit, config-declared
+    (unit, multiplier) rule in config/event_mapping.yaml (`mql5_unit_rule`) that the row's raw
+    metadata satisfies exactly -- e.g. Nonfarm Payrolls exported as unit=JOB, multiplier=THOUSANDS
+    is ValueUnit.THOUSANDS. Anything else stays UNKNOWN (never guessed)."""
+    if row.unit in _PERCENT_UNITS:
+        return ValueUnit.PERCENT
+    rule = getattr(mapping, "mql5_unit_rule", None)
+    if rule and mapping.value_unit and row.unit == rule.get("unit") and row.multiplier == rule.get("multiplier"):
+        return ValueUnit(mapping.value_unit)
+    return ValueUnit.UNKNOWN
 
 
 def _parse_period(period_raw: Optional[str]) -> Optional[dt.date]:
@@ -90,7 +99,7 @@ def normalize_mql5_rows(
             release_ts = None
             quality = TimestampQuality.UNRESOLVED
 
-        unit = _unit_for(row.unit)
+        unit = _unit_for(row, mapping)
 
         # Prefer MqlCalendarValue.period (the real reference period the
         # exporter now preserves) over the inferred prior-month heuristic;

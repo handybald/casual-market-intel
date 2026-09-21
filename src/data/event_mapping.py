@@ -22,6 +22,10 @@ class EventMappingEntry:
     release_bundle: Optional[str]
     mql5_names: List[str]
     forex_factory_names: List[str]
+    # Canonical ValueUnit name for this family's values (e.g. "PERCENT", "THOUSANDS"), if declared.
+    value_unit: Optional[str] = None
+    # Explicit MQL5 (unit, multiplier) pair whose exported number is already in `value_unit`.
+    mql5_unit_rule: Optional[Dict[str, str]] = None
 
 
 class EventMapping:
@@ -70,5 +74,7 @@ def load_event_mapping(path: Optional[Path] = None) -> EventMapping:
             release_bundle=body.get("release_bundle"),
             mql5_names=list(body.get("mql5", [])),
             forex_factory_names=list(body.get("forex_factory", [])),
+            value_unit=body.get("value_unit"),
+            mql5_unit_rule=dict(body["mql5_unit_rule"]) if body.get("mql5_unit_rule") else None,
         )
     return EventMapping(entries)

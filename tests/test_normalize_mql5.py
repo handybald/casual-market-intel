@@ -116,12 +116,10 @@ def test_normalize_mql5_falls_back_to_heuristic_when_period_missing():
     assert event.reference_period == dt.date(2023, 12, 1)  # heuristic: prior month
 
 
-def test_normalize_mql5_percent_unit_is_comparable_other_units_are_unknown():
-    """Regression: unit/multiplier are distinct MQL5 enums; only the
-    PERCENT-family `unit` values are confidently mapped to a comparable
-    ValueUnit. JOB (an `unit`, not `multiplier`, value) must NOT be
-    treated as a safe/comparable unit -- it's UNKNOWN, so it's excluded
-    from numerical cross-source comparison (see validation/macro.py)."""
+def test_normalize_mql5_units_percent_and_declared_nfp_thousands():
+    """PERCENT comes from MQL5's own PERCENT unit. Nonfarm Payrolls (unit=JOB, multiplier=THOUSANDS,
+    value 216 == 216K persons) is THOUSANDS ONLY because config/event_mapping.yaml declares that exact
+    (unit, multiplier) rule for NFP -- see the next test for what must stay UNKNOWN."""
     from src.data.schemas import ValueUnit
 
     rows = parse_mql5_csv(FIXTURE)
@@ -132,7 +130,29 @@ def test_normalize_mql5_percent_unit_is_comparable_other_units_are_unknown():
     assert cpi.actual_unit == ValueUnit.PERCENT.value
 
     nfp = next(e for e in events if e.event_family == "NFP")
-    assert nfp.actual_unit == ValueUnit.UNKNOWN.value
+    assert nfp.actual_unit == ValueUnit.THOUSANDS.value
+    assert nfp.previous_unit == ValueUnit.THOUSANDS.value
+    assert nfp.provider_forecast_unit == ValueUnit.THOUSANDS.value
+    assert nfp.unit == "JOB"  # raw provider label preserved
+    assert load_event_mapping().by_family("NFP").value_unit == "THOUSANDS"
+
+
+def test_normalize_mql5_unit_rule_is_strict_never_guessed():
+    from src.data.fetch.mql5 import Mql5Row
+    from src.data.schemas import ValueUnit
+
+    def nfp(unit, multiplier):
+        return Mql5Row(
+            value_id="1", event_id="1", event_name="Nonfarm Payrolls", country_code="US", currency_code="USD",
+            importance="HIGH", event_time_raw="2024.01.05 13:30:00", period_raw="2023.12.01",
+            unit=unit, multiplier=multiplier, actual_value=216.0, forecast_value=None,
+            prev_value=173.0, revised_prev_value=None, revision=0, source_timezone="SERVER",
+        )
+
+    mapping = load_event_mapping()
+    for unit, multiplier in [("JOB", "NONE"), ("JOB", "MILLIONS"), ("JOB", "UNKNOWN"), ("USD", "THOUSANDS")]:
+        [event] = normalize_mql5_rows([nfp(unit, multiplier)], mapping, ACQUIRED_AT)
+        assert event.actual_unit == ValueUnit.UNKNOWN.value, (unit, multiplier)
 
 
 def test_normalize_mql5_acquisition_time_is_preserved_not_normalize_time():
