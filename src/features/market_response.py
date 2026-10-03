@@ -1,6 +1,6 @@
 """Macro release -> market response features from 1-minute bars (no models, no indicators).
 
-BAR CONVENTION. Massive `timestamp_utc` is the START of a one-minute bar: the bar stamped 12:30:00 covers
+BAR CONVENTION. Canonical `timestamp_utc` is the START of a one-minute bar (Massive and Alpaca both document this): the bar stamped 12:30:00 covers
 12:30:00-12:30:59 and its `close` is the last price of that minute. Bars exist only for minutes that traded, so
 extended-hours data (04:00-20:00 ET) is sparse-capable and is NEVER filtered to regular hours or interpolated.
 
@@ -31,6 +31,11 @@ Simple returns, no annualization. A feature is computed only if EVERY bar it nee
 WINDOW: t-30m .. t+60m = 30 pre bars + 60 post bars -> bars_expected = 90.
 `surprise_raw` = actual - provider_forecast (units validated upstream); `surprise_z_prior_only` is a null placeholder:
 a normalized surprise must later use only observations strictly before the event.
+PROVENANCE. Bars come from ONE stored provider dataset (provider + feed + adjustment); every output row carries
+`market_data_source/feed/feed_scope/adjustment` taken from the stored ROWS (plus `market_data_provenance_basis`), and the
+loader refuses a file whose provenance is missing, null, mixed, or not the requested dataset (only pre-provider
+Massive files are admitted without feed columns, explicitly labelled `legacy_massive_unlabeled`). A response computed from single-venue (e.g. IEX) bars is a different measurement from
+one computed from consolidated bars -- volume features especially -- and must never be pooled with it unknowingly.
 `release_session` (America/New_York) is diagnostic only and never alters timestamps; weekends are CLOSED, exchange
 holidays are not modelled.
 """
@@ -125,20 +130,91 @@ class BarStore:
         return any(start <= ts <= end_inclusive for ts in self._rows)   # coverage probe, not a feature
 
 
-def load_massive_bars(symbol: str, start: dt.datetime, end: dt.datetime, root: Path) -> Optional[pd.DataFrame]:
-    """Bars for [start, end] from data/interim/massive/<SYMBOL>/1min/raw/<YEAR>.parquet (UTC bar-start index).
-    Returns None if no file exists. Reads local files only."""
+# Row provenance every provider-aware interim file must carry, non-null and single-valued.
+PROVENANCE_COLUMNS = ("source", "feed", "feed_scope", "adjustment", "timeframe")
+# Columns the PRE-provider normalizer (Massive-only era) wrote; such files have no feed/feed_scope at all.
+LEGACY_MASSIVE_COLUMNS = ("source", "adjustment", "timeframe")
+PROVENANCE_BASIS_ROWS = "row_columns"
+PROVENANCE_BASIS_LEGACY_MASSIVE = "legacy_massive_unlabeled"
+
+
+class MarketProvenanceError(ValueError):
+    """Stored bars whose provenance is missing, null, mixed, or not the requested dataset."""
+
+
+def _single_value(df: pd.DataFrame, col: str, symbol: str, root: Path) -> str:
+    nulls = int(df[col].isna().sum())
+    if nulls:
+        raise MarketProvenanceError(f"{symbol}: {nulls} row(s) with null {col!r} in {root} -- provenance unknown, refusing")
+    values = sorted(df[col].astype(str).unique())
+    if len(values) > 1:
+        raise MarketProvenanceError(f"{symbol}: mixed {col} values {values} in {root} -- refusing to combine")
+    return values[0]
+
+
+def check_market_provenance(df: pd.DataFrame, symbol: str, root: Path, expected: Dict[str, str],
+                            legacy_unlabeled_source: Optional[str] = None) -> Dict[str, str]:
+    """Row provenance of a stored interim frame, validated against `expected` ({source, feed, feed_scope,
+    adjustment, timeframe}). Every row must carry all PROVENANCE_COLUMNS, non-null and single-valued, equal to
+    `expected` -- the expected values never fill in a missing or null cell.
+
+    The ONLY exception: `legacy_unlabeled_source` (set by a provider that declares it, i.e. Massive) admits files
+    written before feed provenance existed -- `feed` and `feed_scope` columns entirely ABSENT (not null), every
+    LEGACY_MASSIVE_COLUMNS cell present and matching, and `source` equal to that provider. Their feed is then the
+    provider's declared feed, and the returned `provenance_basis` says so explicitly."""
+    have = [c for c in PROVENANCE_COLUMNS if c in df.columns]
+    if len(have) == len(PROVENANCE_COLUMNS):
+        basis, cols = PROVENANCE_BASIS_ROWS, PROVENANCE_COLUMNS
+    elif (legacy_unlabeled_source is not None and "feed" not in df.columns and "feed_scope" not in df.columns
+          and all(c in df.columns for c in LEGACY_MASSIVE_COLUMNS)):
+        basis, cols = PROVENANCE_BASIS_LEGACY_MASSIVE, LEGACY_MASSIVE_COLUMNS
+    else:
+        missing = [c for c in PROVENANCE_COLUMNS if c not in df.columns]
+        raise MarketProvenanceError(f"{symbol}: provenance column(s) {missing} missing in {root} -- refusing")
+    found = {c: _single_value(df, c, symbol, root) for c in cols}
+    if basis == PROVENANCE_BASIS_LEGACY_MASSIVE and found["source"] != legacy_unlabeled_source:
+        raise MarketProvenanceError(
+            f"{symbol}: unlabeled-feed file in {root} has source {found['source']!r}; the legacy exception only "
+            f"covers {legacy_unlabeled_source!r}")
+    for c in cols:
+        if c in expected and found[c] != str(expected[c]):
+            raise MarketProvenanceError(f"{symbol}: stored {c}={found[c]!r} in {root}, expected {expected[c]!r}")
+    prov = dict(found)
+    if basis == PROVENANCE_BASIS_LEGACY_MASSIVE:
+        prov.update(feed=expected["feed"], feed_scope=expected["feed_scope"])
+    prov["provenance_basis"] = basis
+    return prov
+
+
+def load_market_dataset(symbol: str, start: dt.datetime, end: dt.datetime, root: Path, expected: Dict[str, str],
+                        legacy_unlabeled_source: Optional[str] = None
+                        ) -> Tuple[Optional[pd.DataFrame], Optional[Dict[str, str]]]:
+    """(bars, provenance) for [start, end] from <root>/<SYMBOL>/1min/<adjustment>/<YEAR>.parquet, where <root> is
+    ONE provider dataset's interim root (e.g. data/interim/massive, data/interim/alpaca/iex) and <adjustment> is
+    expected["adjustment"]. Bars are indexed by UTC bar start. (None, None) if no file exists. Provenance is
+    checked over EVERY row read (not just the window) by `check_market_provenance`; local files only."""
     frames = []
     for year in range(start.year, end.year + 1):
-        path = Path(root) / symbol / "1min" / "raw" / f"{year}.parquet"
+        path = Path(root) / symbol / "1min" / expected["adjustment"] / f"{year}.parquet"
         if path.exists():
-            frames.append(pd.read_parquet(path, columns=["timestamp_utc", "open", "high", "low", "close", "volume"]))
+            frames.append(pd.read_parquet(path))
     if not frames:
-        return None
-    df = pd.concat(frames)
+        return None, None
+    df = pd.concat(frames, ignore_index=True)
+    prov = check_market_provenance(df, symbol, Path(root), expected, legacy_unlabeled_source)
     df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
-    df = df[(df["timestamp_utc"] >= start) & (df["timestamp_utc"] <= end)].set_index("timestamp_utc").sort_index()
-    return df
+    df = df[(df["timestamp_utc"] >= start) & (df["timestamp_utc"] <= end)]
+    return df[["timestamp_utc", "open", "high", "low", "close", "volume"]].set_index("timestamp_utc").sort_index(), prov
+
+
+MASSIVE_EXPECTED_PROVENANCE = {"source": "MASSIVE", "feed": "consolidated", "feed_scope": "consolidated",
+                               "adjustment": "raw", "timeframe": "1min"}
+
+
+def load_massive_bars(symbol: str, start: dt.datetime, end: dt.datetime, root: Path) -> Optional[pd.DataFrame]:
+    """Backward-compatible: raw 1-minute Massive bars from a Massive interim root (data/interim/massive), with the
+    explicit legacy-Massive provenance exception."""
+    return load_market_dataset(symbol, start, end, root, MASSIVE_EXPECTED_PROVENANCE, legacy_unlabeled_source="MASSIVE")[0]
 
 
 # --------------------------------------------------------------------------- features (each reads only what it needs)
@@ -283,7 +359,9 @@ RESPONSE_COLUMNS = [
     "event_id", "canonical_event_id", "event_family", "release_timestamp_utc", "release_timestamp_basis",
     "release_timestamp_america_new_york", "release_date", "reference_period",
     "provider_forecast", "actual", "actual_source", "surprise_raw", "surprise_z_prior_only",
-    "symbol", "baseline_timestamp_utc", "baseline_price",
+    "symbol", "market_data_source", "market_data_feed", "market_data_feed_scope", "market_data_adjustment",
+    "market_data_provenance_basis",
+    "baseline_timestamp_utc", "baseline_price",
     *FEATURE_COLUMNS, "volume_ratio_30m_status",
     "release_session", "market_window_status", "bars_expected", "bars_found", "baseline_found",
     "missing_bar_count", "missing_pre_bars", "missing_post_bars", "timestamp_minute_aligned",
@@ -297,15 +375,20 @@ def _parse_ts(value) -> Optional[dt.datetime]:
 
 
 def build_market_response(events: Sequence[Dict[str, Any]], bars_by_symbol: Dict[str, Optional[pd.DataFrame]],
-                          cfg: ResponseConfig = ResponseConfig()) -> List[Dict[str, Any]]:
+                          cfg: ResponseConfig = ResponseConfig(),
+                          market_provenance: Optional[Dict[str, Optional[Dict[str, str]]]] = None) -> List[Dict[str, Any]]:
     """Long-format rows, one per (validated calendar release x symbol). `events` are rows from the calendar-
     anchored macro validation; only `trusted_release_timestamp_utc` is used as event time. Symbols never share
-    state: each has its own BarStore."""
+    state: each has its own BarStore. `market_provenance` maps symbol -> the provenance returned by
+    `load_market_dataset` for that symbol's bars; it is copied onto that symbol's rows (null when absent, e.g. no
+    stored data)."""
+    provenance = market_provenance or {}
     stores = {sym: (BarStore(df) if df is not None else None) for sym, df in bars_by_symbol.items()}
     rows: List[Dict[str, Any]] = []
     for ev in events:
         t = _parse_ts(ev.get("trusted_release_timestamp_utc"))
         for sym, store in stores.items():
+            prov = provenance.get(sym) or {}
             w = compute_window(store, t, cfg)
             row = {c: None for c in RESPONSE_COLUMNS}
             row.update(
@@ -318,6 +401,9 @@ def build_market_response(events: Sequence[Dict[str, Any]], bars_by_symbol: Dict
                 provider_forecast=ev.get("ff_provider_forecast"), actual=ev.get("actual_value"),
                 actual_source=ev.get("actual_value_source"), surprise_raw=ev.get("actual_minus_forecast"),
                 surprise_z_prior_only=None, symbol=sym,
+                market_data_source=prov.get("source"), market_data_feed=prov.get("feed"),
+                market_data_feed_scope=prov.get("feed_scope"), market_data_adjustment=prov.get("adjustment"),
+                market_data_provenance_basis=prov.get("provenance_basis"),
                 release_session=classify_session(t) if t else None)
             row.update({k: v for k, v in w.items() if k in row})
             if w["baseline_timestamp_utc"] is not None:

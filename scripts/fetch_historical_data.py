@@ -5,8 +5,8 @@
 
 The user specifies ONE date range. Each provider internally determines
 its own safe chunk size (monthly requests -> yearly parquet for
-Massive, monthly manifest checkpoints for MQL5, a full-range refetch for
-FRED), paginates, retries, rate-limits, resumes from
+every market provider, monthly manifest checkpoints for MQL5, a
+full-range refetch for FRED), paginates, retries, rate-limits, resumes from
 data/manifests/fetch_manifest.json, and deduplicates. Nothing here loops
 over months and re-invokes anything manually.
 
@@ -19,6 +19,13 @@ challenge against automated requests (confirmed via a real 403 with
 `scripts/import_forex_factory.py` importing manually-saved browser
 pages; see `run_forex_factory` below. Both sources report exactly what
 is missing rather than pretending to have fetched it.
+
+MARKET PROVIDERS are ordinary `--sources` entries (`massive`, `alpaca`,
+...; see src/data/fetch/market_provider.py). Each requested provider is
+fetched, validated, checkpointed and stored SEPARATELY -- a failing
+provider is reported as failed, never silently replaced by another one.
+Without `--sources`, the market providers listed in config
+`market.providers` are fetched.
 
 EXIT CODE: 0 only if every REQUESTED source completed with no failures
 recorded during THIS run (a source with missing credentials, an
@@ -37,27 +44,42 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.data.redaction import install_log_redaction, redact_secrets
 from src.data.config import load_config, load_dotenv_if_present
 from src.data.event_mapping import load_event_mapping
 from src.data.manifest import Manifest, utcnow_iso
 from src.data.fetch.mql5 import ingest_mql5_calendar, parse_mql5_csv, _row_date
-from src.data.fetch.massive import fetch_massive_market_data, MissingCredentialsError as MassiveMissingCreds
+from src.data.fetch.market_provider import (
+    MissingCredentialsError as MarketMissingCreds,
+    fetch_market_data,
+    get_market_provider,
+    market_provider_names,
+)
 from src.data.validation.market import UnsupportedTimeframeError
 from src.data.fetch.fred import fetch_all_fred_series, MissingCredentialsError as FredMissingCreds
 from src.data.normalize.mql5 import normalize_mql5_rows
 from src.data.normalize.fred import normalize_fred_official_events
 from src.data.normalize.io import merge_write_events
-from src.data.normalize.market import normalize_market_symbol
+from src.data.normalize.market import CanonicalTimestampError, normalize_market_symbol
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-7s %(message)s",
     datefmt="%H:%M:%S",
 )
+install_log_redaction()
 logger = logging.getLogger("fetch_historical_data")
 
-ALL_SOURCES = ["mql5", "forex_factory", "massive", "fred", "bls"]
-DEFAULT_SOURCES = ["mql5", "forex_factory", "massive", "fred"]  # bls excluded: not implemented (see fetch/bls.py)
+MARKET_SOURCES = market_provider_names()
+ALL_SOURCES = ["mql5", "forex_factory", *MARKET_SOURCES, "fred", "bls"]
+# Default when config does not say otherwise; `default_sources(config)`
+# substitutes config `market.providers` for "massive". bls excluded: 0
+# series configured by default (see fetch/bls.py).
+DEFAULT_SOURCES = ["mql5", "forex_factory", "massive", "fred"]
+
+
+def default_sources(config) -> list:
+    return ["mql5", "forex_factory", *config.market_providers, "fred"]
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -65,10 +87,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--start", type=str, default=None, help="YYYY-MM-DD, defaults to config historical.start_date")
     parser.add_argument("--end", type=str, default=None, help="YYYY-MM-DD, defaults to config historical.end_date (or today)")
     parser.add_argument(
-        "--sources", type=str, default=",".join(DEFAULT_SOURCES),
-        help=f"comma-separated subset of {ALL_SOURCES} (bls is a documented stub, not fetched by default)",
+        "--sources", type=str, default=None,
+        help=f"comma-separated subset of {ALL_SOURCES} (default: macro sources + config market.providers; "
+             f"bls has 0 series configured by default)",
     )
-    parser.add_argument("--symbols", type=str, default=None, help="comma-separated symbols override for Massive")
+    parser.add_argument("--symbols", type=str, default=None, help="comma-separated symbols override for market providers")
     parser.add_argument("--force", action="store_true", help="re-fetch even if manifest says complete")
     parser.add_argument("--mql5-input-csv", help="MQL5 export CSV to ingest")
     parser.add_argument("--macro-country", help="override macro country for this run")
@@ -162,8 +185,13 @@ def run_forex_factory(config, manifest, event_mapping, start, end, force) -> dic
     }
 
 
-def run_massive(config, manifest, symbols, start, end, force) -> dict:
-    per_symbol = fetch_massive_market_data(config, manifest, symbols, start, end, config.market_timeframe, force=force)
+def run_market_provider(config, manifest, provider_name, symbols, start, end, force, provider=None) -> dict:
+    """Fetch + normalize one market provider. Raises MissingCredentialsError
+    / UnsupportedTimeframeError before any network call (see
+    `run_market_source` for how those are reported)."""
+    provider = provider or get_market_provider(provider_name, config)
+    caps = provider.capabilities()
+    per_symbol = fetch_market_data(config, manifest, provider, symbols, start, end, config.market_timeframe, force=force)
     summary = {}
     any_failed = False
     for symbol, results in per_symbol.items():
@@ -172,11 +200,43 @@ def run_massive(config, manifest, symbols, start, end, force) -> dict:
         any_failed = any_failed or bool(failed)
         summary[symbol] = {"bars_fetched": bars, "failed_months": len(failed)}
         try:
-            normalize_market_symbol(config, symbol, start, end, manifest=manifest)
+            normalize_market_symbol(config, symbol, start, end, manifest=manifest, provider=provider)
         except FileNotFoundError as exc:
-            logger.warning("[Massive][%s] normalize skipped: %s", symbol, exc)
+            logger.warning("[%s][%s] normalize skipped: %s", caps.source_label, symbol, exc)
+        except CanonicalTimestampError as exc:
+            logger.error("[%s][%s] normalization REFUSED: %s", caps.source_label, symbol, exc)
+            summary[symbol]["normalize_error"] = redact_secrets(exc)
+            any_failed = True
+    summary["feed"] = caps.feed
+    summary["feed_scope"] = caps.feed_scope
     summary["ok"] = not any_failed
     return summary
+
+
+def run_massive(config, manifest, symbols, start, end, force) -> dict:
+    return run_market_provider(config, manifest, "massive", symbols, start, end, force)
+
+
+def run_market_source(config, manifest, provider_name, symbols, start, end, force) -> dict:
+    """`run_market_provider`, with the up-front, pre-network rejections
+    (missing credentials, unsupported timeframe, invalid provider config)
+    turned into a truthful failed summary instead of a crash."""
+    try:
+        provider = get_market_provider(provider_name, config)
+    except (KeyError, ValueError) as exc:
+        message = redact_secrets(exc)
+        if isinstance(exc, KeyError) and not config.has_provider(provider_name):
+            message = f"no providers.{provider_name} section in config/data_sources.yaml"
+        logger.error("[%s] invalid provider configuration: %s", provider_name, message)
+        return {"error": message, "ok": False}
+    try:
+        return run_market_provider(config, manifest, provider_name, symbols, start, end, force, provider=provider)
+    except MarketMissingCreds as exc:
+        logger.error("[%s] skipped: %s", provider_name, exc)
+        return {"error": redact_secrets(exc), "ok": False}
+    except UnsupportedTimeframeError as exc:
+        logger.error("[%s] rejected before fetching: %s", provider_name, exc)
+        return {"error": redact_secrets(exc), "ok": False}
 
 
 def run_fred(config, manifest, event_mapping, start, end) -> dict:
@@ -226,7 +286,9 @@ def main(argv=None) -> int:
 
     args = parse_args(argv)
     config = config.with_mql5_overrides(args.mql5_input_csv, args.macro_country, args.macro_currency)
-    sources = validate_sources([s.strip() for s in args.sources.split(",") if s.strip()])
+    sources = validate_sources(
+        [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else default_sources(config)
+    )
 
     start = dt.date.fromisoformat(args.start) if args.start else config.start_date
     end = dt.date.fromisoformat(args.end) if args.end else config.end_date
@@ -248,16 +310,9 @@ def main(argv=None) -> int:
         logger.info("=== Forex Factory ===")
         summary["forex_factory"] = run_forex_factory(config, manifest, event_mapping, start, end, args.force)
 
-    if "massive" in sources:
-        logger.info("=== Massive market data ===")
-        try:
-            summary["massive"] = run_massive(config, manifest, symbols, start, end, args.force)
-        except MassiveMissingCreds as exc:
-            logger.error("[Massive] skipped: %s", exc)
-            summary["massive"] = {"error": str(exc), "ok": False}
-        except UnsupportedTimeframeError as exc:
-            logger.error("[Massive] rejected before fetching: %s", exc)
-            summary["massive"] = {"error": str(exc), "ok": False}
+    for name in [s for s in sources if s in MARKET_SOURCES]:
+        logger.info("=== %s market data ===", name)
+        summary[name] = run_market_source(config, manifest, name, symbols, start, end, args.force)
 
     if "fred" in sources:
         logger.info("=== FRED (official validation series) ===")
@@ -278,7 +333,7 @@ def main(argv=None) -> int:
     print("HISTORICAL BOOTSTRAP SUMMARY")
     print("=" * 60)
     for source, result in summary.items():
-        print(f"[{source}] {result}")
+        print(redact_secrets(f"[{source}] {result}"))
     print(f"Failed chunks recorded THIS RUN: {len(this_run_failures)}")
     if preexisting_failures:
         print(

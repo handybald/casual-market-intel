@@ -40,6 +40,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .redaction import redact_secrets
+
 VERIFIED_STATUSES = ("complete", "empty")
 RETRYABLE_STATUSES = ("failed", "provisional")
 
@@ -167,7 +169,7 @@ class Manifest:
     def invalidate_entries_for_missing_or_corrupt_path(
         self, provider: str, key: str, path: Path
     ) -> List[ManifestEntry]:
-        """Any verified (complete/empty) entry for (provider, key) backed
+        """Any verified (complete/empty) or provisional entry for (provider, key) backed
         by `path` where the artifact is now missing or fails checksum
         verification is no longer trustworthy: mark it "failed" so it is
         re-fetched/re-verified.
@@ -189,7 +191,15 @@ class Manifest:
         artifact is intact or no entries reference it).
         """
         path_str = str(path)
-        candidates = [e for e in self._entries.values() if e.path == path_str and e.status in VERIFIED_STATUSES]
+        # "provisional" entries are included: a provisional claim backed by
+        # a missing/altered artifact is no more trustworthy than a
+        # complete one (classify_gaps already treats it as "failed"), and
+        # leaving it "provisional" would let a later sibling rewrite
+        # re-bless it.
+        candidates = [
+            e for e in self._entries.values()
+            if e.path == path_str and e.status in VERIFIED_STATUSES + ("provisional",)
+        ]
         if not candidates:
             return []
         if path.exists():
@@ -244,6 +254,10 @@ class Manifest:
         return self._entries.get(f"{provider}:{key}:{start}:{end}")
 
     def record(self, entry: ManifestEntry) -> None:
+        # Last line of defense: error text often embeds provider responses
+        # or exception chains; credentials must never be persisted.
+        if entry.error:
+            entry.error = redact_secrets(entry.error)
         self._entries[entry.composite_key()] = entry
         self.save()
 

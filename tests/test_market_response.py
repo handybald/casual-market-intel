@@ -300,6 +300,8 @@ def write_massive(root, symbol, bars):
     d.mkdir(parents=True)
     df = bars.reset_index()
     df["symbol"] = symbol
+    # the provenance columns real pre-provider Massive interim files carry (no feed/feed_scope)
+    df["source"], df["timeframe"], df["adjustment"] = "MASSIVE", "1min", "raw"
     df.to_parquet(d / "2025.parquet", index=False)
 
 

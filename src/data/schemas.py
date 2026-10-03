@@ -11,7 +11,7 @@ import datetime as dt
 import enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MacroSource(str, enum.Enum):
@@ -163,7 +163,15 @@ class MacroEvent(BaseModel):
 
 
 class MarketBar(BaseModel):
-    """Canonical single OHLCV bar (post-normalization)."""
+    """Canonical single OHLCV bar (post-normalization), provider-independent.
+
+    `timestamp_utc` is the tz-aware START of the bar interval. `source` is
+    the provider; `feed`/`feed_scope` say WHOSE prints the bar aggregates
+    -- e.g. ALPACA/"iex"/"single_venue" bars contain only IEX trades, so
+    their volume is not comparable to consolidated volume. Optional fields
+    (vwap, transactions) are None when the provider did not supply them;
+    they are never synthesized.
+    """
 
     symbol: str
     timestamp_utc: dt.datetime
@@ -179,8 +187,22 @@ class MarketBar(BaseModel):
     adjustment: str = "raw"
 
     source: str = "MASSIVE"
+    feed: Optional[str] = None
+    feed_scope: Optional[str] = None
+    raw_artifact_checksum: Optional[str] = None
     retrieval_timestamp_utc: dt.datetime
     normalized_at_utc: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
+
+    @field_validator("timestamp_utc", "retrieval_timestamp_utc", "normalized_at_utc")
+    @classmethod
+    def _require_utc_aware(cls, v: dt.datetime) -> dt.datetime:
+        # The canonical market layer never holds a naive datetime: there is
+        # no safe way to know which zone a naive bar time was meant in.
+        if v.tzinfo is None or v.utcoffset() is None:
+            raise ValueError("naive datetime not allowed in the canonical market layer")
+        if v.utcoffset() != dt.timedelta(0):
+            raise ValueError(f"timestamp must be UTC, got offset {v.utcoffset()}")
+        return v
 
 
 class MacroValidationResult(BaseModel):

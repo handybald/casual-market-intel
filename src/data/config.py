@@ -65,6 +65,27 @@ class AppConfig:
     def market_timeframe(self) -> str:
         return self._raw["market"]["timeframe"]
 
+    @property
+    def primary_market_provider(self) -> str:
+        """The market provider downstream consumers (e.g. market-response
+        features) read by default. `market.provider` -- the original,
+        single-provider key -- keeps this meaning."""
+        market = self._raw["market"]
+        if market.get("provider"):
+            return market["provider"]
+        return self.market_providers[0]
+
+    @property
+    def market_providers(self) -> List[str]:
+        """Market providers fetched by default (bootstrap/update when
+        `--sources` is not given). Falls back to `[market.provider]` for
+        configs written before `market.providers` existed."""
+        market = self._raw["market"]
+        providers = market.get("providers")
+        if providers:
+            return list(providers)
+        return [market["provider"]]
+
     # -- storage ---------------------------------------------------------
     def resolve_path(self, relative: str) -> Path:
         p = Path(relative)
@@ -92,6 +113,9 @@ class AppConfig:
     # -- providers ---------------------------------------------------------
     def provider(self, name: str) -> Dict[str, Any]:
         return self._raw["providers"][name]
+
+    def has_provider(self, name: str) -> bool:
+        return name in self._raw.get("providers", {})
 
     def provider_raw_dir(self, name: str) -> Path:
         return self._resolve(self.provider(name)["raw_dir"])

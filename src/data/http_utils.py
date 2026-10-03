@@ -14,9 +14,17 @@ from typing import Optional
 
 import requests
 
+from .redaction import redact_secrets  # noqa: F401 - re-exported
+
 logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+# `requests` embeds the full request URL -- query string included -- in
+# HTTPError and ConnectionError messages, and Massive authenticates via
+# `apiKey=` in the query string; every message built here goes through the
+# shared last-line sanitizer (see src/data/redaction.py).
+_ERROR_BODY_MAX_CHARS = 300
 
 
 class FetchError(RuntimeError):
@@ -58,8 +66,8 @@ def request_with_retry(
                 attempt,
                 max_retries,
                 method,
-                url,
-                exc,
+                redact_secrets(url),
+                redact_secrets(str(exc)),
             )
         else:
             if response.status_code in RETRYABLE_STATUS_CODES:
@@ -71,11 +79,29 @@ def request_with_retry(
                     response.status_code,
                     attempt,
                     max_retries,
-                    url,
+                    redact_secrets(url),
                 )
             else:
-                response.raise_for_status()
-                return response
+                try:
+                    response.raise_for_status()
+                except requests.HTTPError:
+                    pass
+                else:
+                    return response
+                # Raised OUTSIDE the except block so the original
+                # exception (whose message carries the full URL,
+                # credentials included) is neither chained nor kept
+                # as __context__. The provider's own error body is
+                # kept -- usually the only statement of WHY (e.g. an
+                # entitlement limit).
+                # Redact the FULL body first, THEN truncate: truncating
+                # first could cut a credential so the remaining fragment
+                # no longer matches the known secret and leaks.
+                body = redact_secrets(str(getattr(response, "text", "") or ""))[:_ERROR_BODY_MAX_CHARS]
+                raise requests.HTTPError(
+                    f"HTTP {response.status_code} for {method} {redact_secrets(url)}: {body}",
+                    response=response,
+                )
 
         if attempt >= max_retries:
             break
@@ -83,6 +109,9 @@ def request_with_retry(
         delay += random.uniform(0, delay * 0.25)
         time.sleep(delay)
 
+    # Not chained to `last_exc`: its message may carry the full URL with
+    # credentials; the redacted text is included instead.
     raise FetchError(
-        f"exhausted {max_retries} retries for {method} {url}"
-    ) from last_exc
+        f"exhausted {max_retries} retries for {method} {redact_secrets(url)}"
+        + (f": {redact_secrets(str(last_exc))}" if last_exc is not None else "")
+    )

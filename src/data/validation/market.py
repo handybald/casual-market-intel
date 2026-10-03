@@ -62,6 +62,60 @@ DEFAULT_MACRO_REQUIRED_OFFSETS_MINUTES = [-1, 0, 1, 2, 5]
 
 DEFAULT_MIN_SESSION_COMPLETENESS_RATIO = 0.98
 
+# Expected minute-bar density of a feed, declared by the provider (see
+# fetch/market_provider.py ProviderCapabilities.bar_density):
+#   dense  -- consolidated feed; nearly every regular-session minute of a
+#             liquid symbol has a print, so a session below the
+#             completeness threshold, or missing its open/close minute,
+#             indicates a collection problem (hard failure).
+#   sparse -- single-venue feed (e.g. IEX, ~2.5% of US volume per
+#             Alpaca's docs). Providers emit no bar for a minute without
+#             an eligible trade on that venue, so low per-minute
+#             completeness and missing edge minutes are EXPECTED
+#             properties of the feed, not evidence of a failed download.
+#             They are still computed and reported (and `is_clean` stays
+#             False), but do not block finalization. A fully elapsed
+#             session with ZERO bars remains a hard failure.
+BAR_DENSITY_DENSE = "dense"
+BAR_DENSITY_SPARSE = "sparse"
+_BAR_DENSITIES = (BAR_DENSITY_DENSE, BAR_DENSITY_SPARSE)
+
+
+def timestamp_integrity(values: pd.Series, timeframe_minutes: int = 1):
+    """(naive_count, misaligned_count, ts_utc) for a bar-timestamp column.
+
+    Canonical bar timestamps must be timezone-AWARE (any offset is
+    converted to UTC; a naive value is never assumed to be UTC) and lie
+    on the bar grid -- nothing is floored or rounded:
+      - always a whole minute (no seconds / sub-seconds);
+      - for a sub-hour timeframe that divides the hour (1, 2, 3, 5, 10, 15,
+        20, 30 min), on that clock grid (e.g. 5-min bars at :00, :05, ...);
+      - for hour-or-longer timeframes only whole-minute alignment is
+        enforced: providers anchor those differently (clock hour vs.
+        session open), which this check does not adjudicate.
+    `ts_utc` is the UTC-converted series (naive values are localized as
+    UTC only so that the remaining checks can run -- they are counted as
+    defects, never accepted)."""
+    if len(values) == 0:
+        return 0, 0, pd.Series([], dtype="datetime64[ns, UTC]")
+    if isinstance(values.dtype, pd.DatetimeTZDtype):
+        naive = 0
+    elif pd.api.types.is_datetime64_dtype(values.dtype):
+        naive = len(values)
+    else:
+        def _is_naive(x) -> bool:
+            if x is None or (isinstance(x, float) and np.isnan(x)):
+                return False  # null timestamps are a different defect, reported by the OHLCV checks
+            t = pd.Timestamp(x)
+            return t.tzinfo is None
+        naive = int(sum(_is_naive(x) for x in values))
+    ts = pd.to_datetime(values, utc=True)
+    ns = ts.astype("int64")
+    misaligned_mask = (ns % 60_000_000_000) != 0
+    if timeframe_minutes < 60 and 60 % timeframe_minutes == 0:
+        misaligned_mask |= ((ns // 60_000_000_000) % timeframe_minutes) != 0
+    return naive, int(misaligned_mask.sum()), ts
+
 
 @dataclass
 class MarketValidationReport:
@@ -71,6 +125,8 @@ class MarketValidationReport:
     as_of: str = ""  # ISO datetime the validation was evaluated against
     total_rows: int = 0
     is_sorted: bool = True
+    naive_timestamp_count: int = 0       # timezone-naive bar timestamps (never assumed UTC)
+    misaligned_timestamp_count: int = 0  # off the bar grid (e.g. 09:30:15 for 1-minute bars)
     duplicate_timestamp_count: int = 0
     null_or_nonfinite_count: int = 0
     invalid_ohlc_count: int = 0
@@ -92,6 +148,7 @@ class MarketValidationReport:
     sessions_missing_open_edge: List[str] = field(default_factory=list)
     sessions_missing_close_edge: List[str] = field(default_factory=list)
     min_session_completeness_ratio: float = DEFAULT_MIN_SESSION_COMPLETENESS_RATIO
+    bar_density: str = BAR_DENSITY_DENSE
     expected_regular_minutes: int = 0  # sum of ELAPSED expected minutes only (early-close and as-of aware)
     regular_hours_coverage_ratio: float = 0.0
 
@@ -106,6 +163,8 @@ class MarketValidationReport:
     def is_clean(self) -> bool:
         return (
             self.is_sorted
+            and self.naive_timestamp_count == 0
+            and self.misaligned_timestamp_count == 0
             and self.duplicate_timestamp_count == 0
             and self.null_or_nonfinite_count == 0
             and self.invalid_ohlc_count == 0
@@ -128,15 +187,26 @@ class MarketValidationReport:
         whether to FINALIZE a fetch should use this, not `is_clean`.
         A nearly-empty (incomplete) session is a hard failure -- it must
         never be finalized as complete. A provisional (still in
-        progress) session is NOT a hard failure."""
-        return (
+        progress) session is NOT a hard failure.
+
+        For a `bar_density == "sparse"` feed, per-minute completeness and
+        open/close-edge gaps are descriptive only (see BAR_DENSITY_SPARSE);
+        every structural check and zero-bar sessions remain hard."""
+        structural = (
             not self.is_sorted
+            or self.naive_timestamp_count > 0
+            or self.misaligned_timestamp_count > 0
             or self.duplicate_timestamp_count > 0
             or self.null_or_nonfinite_count > 0
             or self.invalid_ohlc_count > 0
             or self.non_positive_price_count > 0
             or self.negative_volume_count > 0
             or bool(self.missing_sessions)
+        )
+        if self.bar_density == BAR_DENSITY_SPARSE:
+            return structural
+        return (
+            structural
             or bool(self.incomplete_sessions)
             or bool(self.sessions_missing_open_edge)
             or bool(self.sessions_missing_close_edge)
@@ -152,6 +222,8 @@ class MarketValidationReport:
             "is_clean": self.is_clean,
             "is_hard_failure": self.is_hard_failure,
             "is_sorted": self.is_sorted,
+            "naive_timestamp_count": self.naive_timestamp_count,
+            "misaligned_timestamp_count": self.misaligned_timestamp_count,
             "duplicate_timestamp_count": self.duplicate_timestamp_count,
             "null_or_nonfinite_count": self.null_or_nonfinite_count,
             "invalid_ohlc_count": self.invalid_ohlc_count,
@@ -170,6 +242,7 @@ class MarketValidationReport:
             "sessions_missing_open_edge": self.sessions_missing_open_edge,
             "sessions_missing_close_edge": self.sessions_missing_close_edge,
             "min_session_completeness_ratio": self.min_session_completeness_ratio,
+            "bar_density": self.bar_density,
             "expected_regular_minutes": self.expected_regular_minutes,
             "regular_hours_coverage_ratio": self.regular_hours_coverage_ratio,
             "macro_windows_checked": self.macro_windows_checked,
@@ -250,6 +323,7 @@ def validate_market_bars(
     macro_required_offsets_minutes: Optional[List[int]] = None,
     as_of: Optional[dt.datetime] = None,
     min_session_completeness_ratio: float = DEFAULT_MIN_SESSION_COMPLETENESS_RATIO,
+    bar_density: str = BAR_DENSITY_DENSE,
 ) -> MarketValidationReport:
     """Validate `df` (expected to already be clipped to [start, end], but
     not required to be -- rows outside the range simply don't match any
@@ -279,6 +353,8 @@ def validate_market_bars(
     around the release -- it only proves a bar exists somewhere in that
     (possibly multi-minute-wide) window.
     """
+    if bar_density not in _BAR_DENSITIES:
+        raise ValueError(f"unknown bar_density {bar_density!r}; expected one of {_BAR_DENSITIES}")
     as_of = as_of or dt.datetime.now(dt.timezone.utc)
     required_offsets = (
         list(macro_required_offsets_minutes)
@@ -288,11 +364,16 @@ def validate_market_bars(
 
     report = MarketValidationReport(
         symbol=symbol, start=start.isoformat(), end=end.isoformat(), as_of=as_of.isoformat(),
-        total_rows=len(df), min_session_completeness_ratio=min_session_completeness_ratio,
+        total_rows=len(df), min_session_completeness_ratio=min_session_completeness_ratio, bar_density=bar_density,
         macro_required_offsets_minutes=required_offsets,
     )
 
-    ts = pd.to_datetime(df["timestamp_utc"], utc=True) if not df.empty else pd.Series([], dtype="datetime64[ns, UTC]")
+    naive, misaligned, ts = timestamp_integrity(df["timestamp_utc"], timeframe_minutes)
+    report.naive_timestamp_count, report.misaligned_timestamp_count = naive, misaligned
+    if naive:
+        report.issues.append(f"{naive} timezone-naive timestamps (canonical bars must be UTC-aware)")
+    if misaligned:
+        report.issues.append(f"{misaligned} timestamps off the {timeframe_minutes}-minute bar grid")
 
     if not df.empty:
         report.is_sorted = bool(ts.is_monotonic_increasing)
@@ -375,23 +456,16 @@ def validate_market_bars(
         expected_count = len(expected_minutes)
         report.expected_regular_minutes += expected_count
 
-        present_minutes = set(elapsed_bars)
-        # A bar "covers" an expected minute if it falls in [minute, minute+timeframe).
-        # For timeframe_minutes=1 this is exact-timestamp matching; expressed
-        # generally so a coarser configured timeframe still works.
-        covered = 0
-        first_missing_open = False
-        last_missing_close = False
-        if expected_minutes:
-            for i, minute in enumerate(expected_minutes):
-                next_minute = minute + timeframe
-                hit = any(minute <= p < next_minute for p in present_minutes)
-                if hit:
-                    covered += 1
-                elif i == 0:
-                    first_missing_open = True
-                elif i == len(expected_minutes) - 1:
-                    last_missing_close = True
+        # A bar "covers" expected slot i (= [open + i*tf, open + (i+1)*tf))
+        # iff it starts inside that slot. Every elapsed in-session bar lies
+        # in exactly one slot, so the covered set is computed in O(bars)
+        # (it used to be an O(slots x bars) scan -- identical result).
+        tf_ns = int(timeframe / dt.timedelta(microseconds=1)) * 1000
+        open_ns = pd.Timestamp(open_utc).value
+        covered_slots = {int((p.value - open_ns) // tf_ns) for p in elapsed_bars}
+        covered = sum(1 for i in covered_slots if 0 <= i < expected_count)
+        first_missing_open = expected_count > 0 and 0 not in covered_slots
+        last_missing_close = expected_count > 1 and (expected_count - 1) not in covered_slots
 
         completeness = (covered / expected_count) if expected_count else 1.0
 

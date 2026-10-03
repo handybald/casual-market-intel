@@ -15,7 +15,7 @@ complete (see src/data/manifest.py `is_complete`). What actually gets
     if a later interval already succeeded -- see
     Manifest.completion_watermark / coverage_gaps),
   - any interval still PROVISIONAL (the current month/trailing
-    revision-overlap window for Massive/Forex Factory, always re-synced
+    revision-overlap window for market providers/Forex Factory, always re-synced
     rather than trusted as final),
   - whatever is newly in range since the last run,
   - and, for FRED, everything -- by design (see fetch/fred.py) FRED
@@ -39,10 +39,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from src.data.redaction import install_log_redaction, redact_secrets
 from src.data.config import load_config, load_dotenv_if_present
 from src.data.event_mapping import load_event_mapping
 from src.data.manifest import Manifest, utcnow_iso
-from src.data.fetch.massive import cache_key as massive_cache_key
+from src.data.fetch.market_provider import get_market_provider
 from src.data.fetch.forex_factory import MANIFEST_KEY as FF_MANIFEST_KEY
 
 import fetch_historical_data as bootstrap  # reuses run_mql5 / run_forex_factory / run_massive / run_fred / run_bls
@@ -52,13 +53,17 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-7s %(message)s",
     datefmt="%H:%M:%S",
 )
+install_log_redaction()
 logger = logging.getLogger("update_data")
 
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--end", type=str, default=None, help="YYYY-MM-DD, defaults to today")
-    parser.add_argument("--sources", type=str, default=",".join(bootstrap.DEFAULT_SOURCES))
+    parser.add_argument(
+        "--sources", type=str, default=None,
+        help="comma-separated sources (default: macro sources + config market.providers)",
+    )
     parser.add_argument("--symbols", type=str, default=None)
     return parser.parse_args(argv)
 
@@ -74,7 +79,9 @@ def main(argv=None) -> int:
     manifest = Manifest(config.manifest_path)
 
     args = parse_args(argv)
-    sources = bootstrap.validate_sources([s.strip() for s in args.sources.split(",") if s.strip()])
+    sources = bootstrap.validate_sources(
+        [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else bootstrap.default_sources(config)
+    )
     end = dt.date.fromisoformat(args.end) if args.end else dt.date.today()
     start = config.start_date
     if start > end:
@@ -92,21 +99,9 @@ def main(argv=None) -> int:
     if "forex_factory" in sources:
         summary["forex_factory"] = bootstrap.run_forex_factory(config, manifest, event_mapping, start, end, force=False)
 
-    if "massive" in sources:
-        try:
-            summary["massive"] = bootstrap.run_massive(config, manifest, symbols, start, end, force=False)
-        except Exception as exc:  # noqa: BLE001 - MissingCredentialsError etc, already the pattern bootstrap uses
-            from src.data.fetch.massive import MissingCredentialsError
-            from src.data.validation.market import UnsupportedTimeframeError
-
-            if isinstance(exc, MissingCredentialsError):
-                logger.error("[Massive] skipped: %s", exc)
-                summary["massive"] = {"error": str(exc), "ok": False}
-            elif isinstance(exc, UnsupportedTimeframeError):
-                logger.error("[Massive] rejected before fetching: %s", exc)
-                summary["massive"] = {"error": str(exc), "ok": False}
-            else:
-                raise
+    market_sources = [s for s in sources if s in bootstrap.MARKET_SOURCES]
+    for name in market_sources:
+        summary[name] = bootstrap.run_market_source(config, manifest, name, symbols, start, end, force=False)
 
     if "fred" in sources:
         try:
@@ -133,11 +128,13 @@ def main(argv=None) -> int:
     gap_report = {}
     if "forex_factory" in sources:
         gap_report["forex_factory"] = _remaining_gaps(manifest, "forex_factory", FF_MANIFEST_KEY, start, end, end)
-    if "massive" in sources:
+    for name in market_sources:
+        if summary[name].get("error"):
+            continue  # rejected before fetching -- already a provider-level failure
+        provider = get_market_provider(name, config)
         for symbol in symbols:
-            provider_cfg = config.provider("massive")
-            key = massive_cache_key(symbol, config.market_timeframe, bool(provider_cfg.get("adjusted", False)))
-            gap_report[f"massive:{symbol}"] = _remaining_gaps(manifest, "massive", key, start, end, end)
+            key = provider.cache_key(symbol, config.market_timeframe)
+            gap_report[f"{name}:{symbol}"] = _remaining_gaps(manifest, name, key, start, end, end)
 
     this_run_failures = [e for e in manifest.failed_entries() if e.retrieved_at >= run_started_at]
 
@@ -145,7 +142,7 @@ def main(argv=None) -> int:
     print("INCREMENTAL UPDATE SUMMARY")
     print("=" * 60)
     for source, result in summary.items():
-        print(f"[{source}] {result}")
+        print(redact_secrets(f"[{source}] {result}"))
     print(f"Failed chunks recorded THIS RUN: {len(this_run_failures)}")
     blocking_gaps = {}
     for key, gaps in gap_report.items():

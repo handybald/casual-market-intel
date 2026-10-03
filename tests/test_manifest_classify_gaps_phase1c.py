@@ -38,6 +38,38 @@ import fetch_historical_data as bootstrap
 import update_data as update
 
 
+def _assert_range_recorded(manifest, key, start, end, status):
+    """Every manifest entry recorded for exactly [start, end] has `status`
+    (a status or a tuple of acceptable statuses) and together they tile the range with no hole. Chunk-agnostic on
+    purpose: Massive checkpoints per calendar month, so a window computed
+    relative to `today` (e.g. today-6 .. today-1) is split into two
+    entries whenever it crosses a month boundary -- which made a plain
+    `manifest.get(..., start, end)` lookup fail on the first days of
+    every month. Superseded older entries are ignored."""
+    inside = [
+        e for e in manifest.entries_for("massive", key)
+        if e.start_date() >= start and e.end_date() <= end
+    ]
+    # An older entry wholly re-covered by a newer attempt is superseded
+    # history, not the current state of that range.
+    entries = [
+        e for e in inside
+        if not any(
+            f is not e and f.retrieved_at > e.retrieved_at
+            and f.start_date() <= e.start_date() and f.end_date() >= e.end_date()
+            for f in inside
+        )
+    ]
+    assert entries, f"no entries recorded inside {start}..{end}"
+    allowed = (status,) if isinstance(status, str) else tuple(status)
+    assert all(e.status in allowed for e in entries), [(e.start, e.end, e.status) for e in entries]
+    cursor = start
+    for e in sorted(entries, key=lambda e: e.start):
+        assert e.start_date() == cursor, [(e.start, e.end) for e in entries]
+        cursor = e.end_date() + dt.timedelta(days=1)
+    assert cursor == end + dt.timedelta(days=1)
+
+
 def make_config(tmp_path) -> AppConfig:
     raw = {
         "historical": {"start_date": "2020-01-01", "end_date": None},
@@ -98,7 +130,7 @@ def test_repaired_wider_provisional_range_supersedes_older_failed_subrange(isola
 
     key = massive_fetch.cache_key("QQQ", "1min", False)
     manifest = Manifest(isolated.manifest_path)
-    assert manifest.get("massive", key, wide_start.isoformat(), narrow_end.isoformat()).status == "failed"
+    _assert_range_recorded(manifest, key, wide_start, narrow_end, "failed")
 
     monkeypatch.setattr(
         massive_fetch, "fetch_window_bars",
@@ -108,8 +140,10 @@ def test_repaired_wider_provisional_range_supersedes_older_failed_subrange(isola
     assert code == 0  # THE regression: must not be blocked by the now-superseded old failure
 
     manifest = Manifest(isolated.manifest_path)
-    wide_entry = manifest.get("massive", key, wide_start.isoformat(), wide_end.isoformat())
-    assert wide_entry.status == "provisional"
+    # Successfully repaired: "provisional" inside the revision-overlap
+    # horizon, already "complete" for an older month chunk (e.g. Sept when
+    # today is Oct 4) -- both are success; neither may be "failed".
+    _assert_range_recorded(manifest, key, wide_start, wide_end, ("provisional", "complete"))
 
     gaps = manifest.classify_gaps("massive", key, wide_start, wide_end, today=wide_end)
     assert all(g.reason != "failed" for g in gaps), gaps
@@ -139,7 +173,7 @@ def test_partial_repair_splits_gap_preserving_still_failed_prefix(isolated, monk
 
     key = massive_fetch.cache_key("QQQ", "1min", False)
     manifest = Manifest(isolated.manifest_path)
-    assert manifest.get("massive", key, wide_fail_start.isoformat(), wide_fail_end.isoformat()).status == "failed"
+    _assert_range_recorded(manifest, key, wide_fail_start, wide_fail_end, "failed")
 
     # Only request the NARROWER tail-through-today range this time --
     # deliberately "forgetting" the earlier prefix by moving the
@@ -154,13 +188,17 @@ def test_partial_repair_splits_gap_preserving_still_failed_prefix(isolated, monk
     assert code == 0
 
     manifest = Manifest(isolated.manifest_path)
-    repaired_entry = manifest.get("massive", key, narrow_repair_start.isoformat(), wide_end.isoformat())
-    assert repaired_entry.status == "provisional"
+    _assert_range_recorded(manifest, key, narrow_repair_start, wide_end, ("provisional", "complete"))
 
     gaps = manifest.classify_gaps("massive", key, wide_fail_start, wide_end, today=wide_end)
     by_reason = {g.reason: (g.start, g.end) for g in gaps}
     assert by_reason.get("failed") == (wide_fail_start, narrow_repair_start - dt.timedelta(days=1)), gaps
-    assert by_reason.get("provisional") == (narrow_repair_start, wide_end), gaps
+    # The repaired suffix is no longer a failure: whatever of it is still
+    # inside the revision-overlap horizon is "provisional" and runs to
+    # today; any older part is finalized and therefore not a gap at all.
+    assert set(by_reason) <= {"failed", "provisional"}, gaps
+    if "provisional" in by_reason:
+        assert by_reason["provisional"][1] == wide_end and by_reason["provisional"][0] >= narrow_repair_start, gaps
 
 
 def test_classify_gaps_treats_provisional_entry_with_missing_artifact_as_failed(tmp_path):

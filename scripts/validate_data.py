@@ -4,7 +4,8 @@
     python scripts/validate_data.py
 
 Runs cross-source macro validation (MQL5 vs Forex Factory vs official
-FRED-derived values) and per-symbol/year OHLCV sanity checks -- including
+FRED-derived values) and, for every registered market provider with
+stored data (Massive, Alpaca/<feed>, ...), per-symbol/year OHLCV sanity checks -- including
 real NYSE session coverage and macro-release-window coverage -- over
 whatever has already been fetched. Read-only: never modifies raw or
 interim data, never fills gaps -- it only reports, and persists its
@@ -26,14 +27,16 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 
+from src.data.redaction import install_log_redaction
 from src.data.config import load_config
 from src.data.manifest import Manifest
-from src.data.fetch.massive import cache_key, parse_timeframe
+from src.data.fetch.market_provider import market_provider_class, market_provider_names, parse_timeframe
 from src.data.normalize.io import read_events
 from src.data.validation.macro import compare_macro_sources, summarize
 from src.data.validation.market import UnsupportedTimeframeError, timeframe_minutes_from_parts, validate_market_bars
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
+install_log_redaction()
 logger = logging.getLogger("validate_data")
 
 
@@ -76,7 +79,7 @@ def validate_macro(config, report_dir: Path):
 
 
 def _merged_requested_intervals(
-    manifest: Manifest, key: str, year: int
+    manifest: Manifest, key: str, year: int, provider: str = "massive"
 ) -> List[Tuple[dt.date, dt.date]]:
     """Union of every manifest entry's [start, end] for this (provider,
     key), clipped to `year`, merging overlapping/adjacent ranges into
@@ -90,7 +93,7 @@ def _merged_requested_intervals(
     range that always matches whatever happens to be on disk."""
     year_start, year_end = dt.date(year, 1, 1), dt.date(year, 12, 31)
     raw_intervals = sorted(
-        (e.start_date(), e.end_date()) for e in manifest.entries_for("massive", key)
+        (e.start_date(), e.end_date()) for e in manifest.entries_for(provider, key)
     )
     clipped = []
     for start, end in raw_intervals:
@@ -120,11 +123,33 @@ def validate_market(config, macro_events, report_dir: Path) -> bool:
     bounded by elapsed time via the real acquisition instant
     (`validate_market_bars`'s `as_of` default). A partial-year or
     current-year-in-progress dataset must not have its never-requested
-    months reported as missing sessions."""
+    months reported as missing sessions.
+
+    Every registered market provider configured in this config is
+    validated separately, against its own manifest entries, with the
+    hard-failure policy its declared `bar_density` implies (see
+    validation/market.py). Providers are never pooled."""
     print("\n--- Market OHLCV validation ---")
-    raw_root = config.provider_raw_dir("massive")
-    if not raw_root.exists():
-        print("No Massive raw data found in data/raw/massive/. Run fetch_historical_data.py first.")
+    # Datasets are discovered from STORAGE (every provider x stored variant,
+    # e.g. Alpaca iex AND sip), not from the active fetch config, so a
+    # corrupted dataset the config does not currently select is still found.
+    providers, unknown_dirs = [], []
+    for name in market_provider_names():
+        if not config.has_provider(name):
+            continue
+        try:
+            found, unknown = market_provider_class(name).stored_datasets(config)
+        except ValueError as exc:
+            print(f"[{name}] SKIPPED -- invalid provider configuration: {exc}")
+            continue
+        providers.extend(found)
+        unknown_dirs.extend(unknown)
+    for d in unknown_dirs:
+        print(f"[{d}] HARD FAILURE -- stored market data directory does not map to a known dataset "
+              f"(provider/feed); it cannot be validated without guessing its semantics")
+    if not providers and not unknown_dirs:
+        print("No market raw data found for any configured provider (e.g. data/raw/massive/). "
+              "Run fetch_historical_data.py first.")
         return False
 
     # Macro-release-window coverage is a precision-sensitive, minute-level
@@ -141,7 +166,17 @@ def validate_market(config, macro_events, report_dir: Path) -> bool:
     manifest = Manifest(config.manifest_path)
     any_hard_failure = False
     report_dir.mkdir(parents=True, exist_ok=True)
-    for symbol_dir in sorted(raw_root.iterdir()):
+    for provider in providers:
+        if _validate_provider_market(provider, manifest, release_timestamps, report_dir):
+            any_hard_failure = True
+    return any_hard_failure or bool(unknown_dirs)
+
+
+def _validate_provider_market(provider, manifest, release_timestamps, report_dir: Path) -> bool:
+    caps = provider.capabilities()
+    tag = f"[{provider.dataset_label}]"
+    any_hard_failure = False
+    for symbol_dir in sorted(provider.raw_dataset_root().iterdir()):
         if not symbol_dir.is_dir():
             continue
         symbol = symbol_dir.name
@@ -152,9 +187,8 @@ def validate_market(config, macro_events, report_dir: Path) -> bool:
             for adj_dir in sorted(timeframe_dir.iterdir()):
                 if not adj_dir.is_dir():
                     continue
-                adj_label = adj_dir.name  # "raw" | "adjusted"
-                adjusted = adj_label == "adjusted"
-                key = cache_key(symbol, timeframe, adjusted)
+                adj_label = adj_dir.name  # adjustment policy label, e.g. "raw"
+                key = provider.cache_key(symbol, timeframe, adj_label)
 
                 n, timespan = parse_timeframe(timeframe)
                 try:
@@ -164,17 +198,17 @@ def validate_market(config, macro_events, report_dir: Path) -> bool:
                     # validation/market.py's timeframe_minutes_from_parts.
                     timeframe_minutes = timeframe_minutes_from_parts(n, timespan)
                 except UnsupportedTimeframeError as exc:
-                    print(f"[{symbol}][{timeframe}][{adj_label}] SKIPPED -- {exc}")
+                    print(f"{tag}[{symbol}][{timeframe}][{adj_label}] SKIPPED -- {exc}")
                     continue
 
                 for parquet_path in sorted(adj_dir.glob("*.parquet")):
                     year = int(parquet_path.stem)
                     df = pd.read_parquet(parquet_path)
 
-                    intervals = _merged_requested_intervals(manifest, key, year)
+                    intervals = _merged_requested_intervals(manifest, key, year, provider.name)
                     if not intervals:
                         print(
-                            f"[{symbol}][{timeframe}][{adj_label}][{year}] SKIPPED -- no manifest "
+                            f"{tag}[{symbol}][{timeframe}][{adj_label}][{year}] SKIPPED -- no manifest "
                             f"entries found for this key; cannot determine requested coverage "
                             f"without guessing, so not validating session completeness for this file."
                         )
@@ -185,6 +219,7 @@ def validate_market(config, macro_events, report_dir: Path) -> bool:
                             df, symbol, start, end,
                             timeframe_minutes=timeframe_minutes,
                             macro_release_timestamps_utc=release_timestamps,
+                            bar_density=caps.bar_density,
                         )
                         for start, end in intervals
                     ]
@@ -196,7 +231,7 @@ def validate_market(config, macro_events, report_dir: Path) -> bool:
                     for (start, end), report in zip(intervals, reports):
                         status = "CLEAN" if report.is_clean else ("HARD FAILURE" if report.is_hard_failure else "ISSUES")
                         print(
-                            f"[{symbol}][{timeframe}][{adj_label}][{year}] "
+                            f"{tag}[{symbol}][{timeframe}][{adj_label}][{year}] "
                             f"requested={start.isoformat()}..{end.isoformat()} {status} rows={report.total_rows} "
                             f"missing_sessions={len(report.missing_sessions)} gaps={report.gap_count} "
                             f"largest_gap_min={report.largest_gap_minutes:.1f} "
@@ -206,11 +241,12 @@ def validate_market(config, macro_events, report_dir: Path) -> bool:
                         for issue in report.issues:
                             print(f"    - {issue}")
 
-                    out_path = report_dir / f"market_{symbol}_{timeframe}_{adj_label}_{year}.json"
+                    out_path = report_dir / f"{provider.stored_report_prefix}_{symbol}_{timeframe}_{adj_label}_{year}.json"
                     out_path.write_text(
                         json.dumps(
                             {
                                 "symbol": symbol, "timeframe": timeframe, "adjustment": adj_label, "year": year,
+                                "provider_capabilities": caps.to_dict(),
                                 "requested_intervals": [f"{s.isoformat()}..{e.isoformat()}" for s, e in intervals],
                                 "reports": [r.to_dict() for r in reports],
                             },

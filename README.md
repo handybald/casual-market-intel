@@ -13,9 +13,141 @@ databases, or orchestration infrastructure.
 |---|---|---|
 | MQL5 Economic Calendar | event metadata, `actual`/`previous`/`revised_previous`; `forecast` is diagnostic only | none (manual MetaTrader export, see below) |
 | Forex Factory | canonical pre-release forecast (`provider_forecast`, never called `economist_consensus`) | none — public HTTP scrape |
-| Massive | consolidated US-equity 1-minute market data (QQQ/SPY, configurable) | `MASSIVE_API_KEY` |
+| Alpaca (SIP) | **canonical** 1-minute market data: consolidated US-equity OHLC, volume, VWAP (QQQ/SPY, configurable); default market provider | `APCA_API_KEY_ID` + `APCA_API_SECRET_KEY` (free Basic plan, live-verified) |
+| Alpaca (IEX) | sparse single-venue sanity check only (`feed: "iex"`, stored separately) — **not** consolidated | same keys |
+| Massive | validation/reference market provider (explicit `--sources massive`); not the canonical source | `MASSIVE_API_KEY` |
 | FRED | official observations for validation/revision history — never a forecast source | `FRED_API_KEY` |
 | BLS | real adapter, deliberately configured with **0 series by default** (FRED already covers the currently-mapped indicators) | `BLS_API_KEY` (optional) |
+
+## Market data providers
+
+### Source policy
+
+| Quantity | Canonical source | Notes |
+|---|---|---|
+| 1-minute OHLC | **Alpaca SIP**, raw (unadjusted) | consolidated tape; default `providers.alpaca.feed: "sip"` |
+| Volume | **Alpaca SIP** | provider volume definitions differ (see below); downstream volume features use ONE source and record it |
+| VWAP | **Alpaca SIP** `vw` | Massive's `vw` is kept only as provider-native reference data, never mapped onto the same quantity |
+
+- Massive is a **validation/reference** provider: historical overlap and
+  implementation checks. It is not fetched by default.
+- Alpaca IEX is an independent **sparse single-venue** sanity check, not a
+  research dataset.
+- Databento (future) would cover selected microstructure/event windows
+  only (trades/BBO/L2/L3).
+- The research benchmark is **2016-01-01 → present**.
+
+**Evidence** (live, 2026-10-04, QQQ 1-minute raw; reports in `data/reports/`
+and `data/manifests/validation_reports/`):
+- Alpaca SIP on the current *free Basic* account served historical data
+  for 2016-03-15, 2017-06-15, 2024-10-02, 2024-11-06, 2024-11-28 and
+  2024-11-29:
+  - full regular sessions every trading day, including the 09:30–13:00
+    early close (210/210 minutes);
+  - the Thanksgiving holiday returned an empty response, recorded as
+    verified-empty;
+  - multi-page pagination works.
+- Against stored Massive data on the three 2024 trading days:
+  - every regular-session minute is present in both;
+  - close prices match exactly on 99.8–100% of bars;
+  - 1-minute return correlation is 1.0;
+  - volume matches exactly on 99.0–99.4% of bars.
+
+**What differs between Alpaca SIP and Massive:**
+- **Volume.** SIP total volume was 0.2–5.0% higher. The difference sits in
+  opening/closing-auction bars, block-like round-lot prints and isolated
+  large prints. The two providers evidently apply different trade-condition
+  rules, so their volumes are **not interchangeable**.
+- **Highs/lows.** A few single bars differ in high or low (e.g. one
+  regular-session high differed by $0.50 with identical volume). This
+  matters for high/low-based features (`max_up`/`max_down`).
+- **VWAP.** Massive's minute `vw` lies outside its own bar's [low, high] in
+  14–20% of bars (119/836, 127/907, 95/473); Alpaca SIP's never did. The two fields are
+  different quantities.
+- **Not independent.** Alpaca and Massive are separate vendors, but both
+  aggregate the consolidated tape. Their near-identical bars are therefore
+  *not* statistically independent evidence; agreement checks
+  implementation, not the underlying market record.
+
+### Architecture
+
+Market bars go through a provider-independent contract
+(`src/data/fetch/market_provider.py`): each provider supplies only its
+transport, credentials, storage identity and an explicit
+`ProviderCapabilities` declaration. Chunking, manifest resume, NYSE-session
+validation before finalization, provisional windows, checksums and
+sibling reconciliation run in one shared code path for every provider.
+Downstream code (normalization, `validate_data.py`, market response,
+comparison) branches on declared capabilities (`feed_scope`,
+`bar_density`, ...), not on provider names.
+
+| Provider | Role now | Feed / scope | History | Status |
+|---|---|---|---|---|
+| Alpaca `sip` | **canonical** market dataset (default `market.provider`, `feed: "sip"`) | all US exchanges, dense | "since 2016" (2016-03-15 live-verified); Basic plan requires `end` ≥ 15 min old (capped automatically) | live-verified on the free Basic account |
+| Alpaca `iex` | sparse single-venue sanity check | IEX only (~2.5% of US volume per Alpaca docs), **sparse** | "since 2016" | live-verified (2024-10-02) |
+| Massive | validation/reference only | consolidated, dense | plan-dependent (not declared) | implemented; 1-minute range retrieval not live-verified with the current plan-limited key; existing stored 2024 data used for overlap checks |
+| EODHD | future deep-history 1-minute backfill candidate | — | — | **not implemented, not required**; add a `MarketDataProvider` subclass once an account and its actual entitlements are verified |
+| Databento | future, optional: trades/BBO/MBP/MBO for *selected event windows only* | — | — | **not implemented, not part of the bootstrap**; `ProviderCapabilities` has `trades/quotes/bbo/l2/l3` flags reserved for it |
+
+**Dataset identity.** Provider + feed + adjustment policy are part of the
+manifest key and storage path. Nothing merges them:
+
+- Massive (unchanged): `data/raw/massive/{SYM}/{tf}/{raw|adjusted}/{year}.parquet`, key `SYM:tf:raw`
+- Alpaca: `data/raw/alpaca/{feed}/{SYM}/{tf}/{adjustment}/{year}.parquet`, key `SYM:tf:adjustment:feed`
+
+Normalized bars (`data/interim/...`, same layout) carry `source`, `feed`,
+`feed_scope`, `adjustment`, `timeframe`, `retrieval_timestamp_utc`,
+`normalized_at_utc`, `raw_artifact_path` and `raw_artifact_checksum`;
+`vwap`/`transactions` stay null when a provider does not supply them.
+`timestamp_utc` is always tz-aware UTC and always the bar's interval
+**start** (both providers document this), and the canonical `MarketBar`
+rejects naive or non-UTC timestamps.
+
+**Timestamps.** Canonical bars must be timezone-aware (any offset is
+converted to UTC; a naive value is never assumed to be UTC) and on the bar
+grid:
+- always a whole minute;
+- for sub-hour timeframes that divide the hour, on that clock grid;
+- for hour-plus timeframes, only whole minutes are enforced (providers
+  anchor these differently).
+
+A naive or off-grid timestamp (e.g. `09:30:15` for 1-minute bars) is a
+hard validation failure. Normalization refuses such raw data; nothing is
+floored or rounded.
+
+**IEX is not consolidated data.** Alpaca's free `iex` feed aggregates only
+IEX prints. Its volume and trade counts are a fraction of market volume,
+and its OHLC are IEX's prints. Minutes with no IEX trade have no bar
+(Alpaca emits no bar without an eligible trade). The provider declares this
+(`feed_scope: single_venue`, `bar_density: sparse`). Two consequences:
+
+- *Fetch-time validation:* a sparse feed's sessions below the per-minute
+  completeness threshold, or missing their open/close minute, are still
+  computed and reported (`is_clean` stays false). They do not block
+  finalization. A fully elapsed session with zero bars, and every
+  structural check (duplicates, invalid OHLC, non-finite values, ...),
+  remain hard failures. The policy is recorded in each validation report
+  (`bar_density`).
+- *Downstream:* market-response rows record `market_data_source/feed/
+  feed_scope/adjustment/provenance_basis`, taken from the stored **rows**.
+  The bar loader refuses a file in which any of `source/feed/feed_scope/
+  adjustment/timeframe` is missing, null, mixed, or different from the
+  requested dataset; config never fills in a missing value. The single
+  exception is explicit and Massive-only: interim files written before
+  feed provenance existed have no `feed`/`feed_scope` columns at all, but
+  every other column matches. They are accepted and labelled
+  `provenance_basis = legacy_massive_unlabeled`. A response measured on IEX
+  bars is a different measurement and must not be pooled with consolidated
+  responses unknowingly.
+
+**Benchmark.** The research benchmark remains **2016-01-01 → present**.
+It is acquired from Alpaca SIP in controlled phases: calendar year 2016
+first, reviewed before the remaining years. EODHD remains only a fallback
+candidate and is not needed while Alpaca SIP keeps validating.
+
+**No silent fallback.** If a requested provider fails (credentials,
+entitlement, malformed response, validation), that provider is reported
+as failed. The run never substitutes another provider's data.
 
 ## Setup
 
@@ -23,7 +155,7 @@ databases, or orchestration infrastructure.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in MASSIVE_API_KEY / FRED_API_KEY
+cp .env.example .env   # fill in MASSIVE_API_KEY / FRED_API_KEY (+ APCA_API_KEY_ID / APCA_API_SECRET_KEY for Alpaca)
 ```
 
 Python 3.9+ (the repo avoids 3.10-only syntax on purpose;
@@ -53,7 +185,10 @@ coverage gap, or (`update_data.py`) still has an unresolved gap — a
 successful refresh whose only "gap" is today's still-provisional data
 exits 0; a gap backed by an actual failure or nothing at all does not.
 `--sources` rejects unknown names outright rather than silently doing
-nothing. `validate_data.py` exits non-zero on a **hard** data-integrity
+nothing. Market providers are ordinary sources: `--sources massive` works
+as before, `--sources alpaca` or `--sources massive,alpaca` select others;
+without `--sources`, the providers in config `market.providers` are used
+(default `["massive"]`). `--symbols` applies to every market provider. `validate_data.py` exits non-zero on a **hard** data-integrity
 failure (invalid OHLCV, missing sessions, etc.) — a cross-source
 `MISMATCH` alone does not fail the run, since surfacing disagreement is
 the point of running it.
@@ -71,6 +206,57 @@ quarter (requires `FRED_API_KEY`); the second fetches ten days of QQQ
 1-minute bars (requires `MASSIVE_API_KEY` on a plan that includes range
 aggregates — see Known limitations). Confirm both report `ok: True`
 before running a multi-year backfill.
+
+### Free market-data smoke test and cross-provider validation
+
+Requires only free Alpaca Basic-plan keys (`APCA_API_KEY_ID`,
+`APCA_API_SECRET_KEY`):
+
+```bash
+# 1. a few weeks of Alpaca 1-minute bars (feed comes from config providers.alpaca.feed: "sip" by default;
+#    set "iex" to collect the single-venue sanity-check dataset instead -- each feed is stored separately)
+python scripts/fetch_historical_data.py --sources alpaca --symbols QQQ --start 2024-01-02 --end 2024-01-31
+
+# 2. the same window from Massive, if your plan allows it
+python scripts/fetch_historical_data.py --sources massive --symbols QQQ --start 2024-01-02 --end 2024-01-31
+
+# 3. descriptive discrepancy report (reads stored data only; fetches nothing)
+python scripts/compare_market_providers.py --providers massive,alpaca --symbols QQQ --start 2024-01-02 --end 2024-01-31
+```
+
+The comparison (`src/data/validation/cross_provider.py`) aligns bars on
+exact bar-start timestamps. It reports:
+
+- coverage: in both, only in A, only in B, overlap ratios, and
+  regular-session vs. extended-hours splits based on real NYSE sessions;
+- per-session presence differences;
+- OHLC absolute and relative differences (median/p95/max);
+- volume differences and ratios;
+- the correlation of close-to-close returns over consecutive minutes
+  present in both providers;
+- the largest close discrepancies;
+- each provider's manifest gaps in the window, so a coverage difference
+  can be traced to a failed or missing fetch.
+
+These are **descriptive metrics, not pass/fail tolerances**. Return
+correlation counts a return as regular-session only when both of its
+bars are inside the regular session. Hard integrity failures (naive or
+duplicate timestamps, invalid OHLC, non-finite values, misaligned bars)
+are reported separately and make the command exit 1. So does a side with
+no usable data: the output says whether the stored file is absent (`NO
+STORED FILE`) or exists without a bar in the requested window (`NO BARS
+IN WINDOW`). This is an inability to compare, not a discrepancy. Pairs with different timeframes or adjustment policies
+are refused (exit 2). When feed scopes differ, the report flags volume as
+not comparable as full-market volume. Reports are written to
+`data/reports/provider_comparison_<a>_vs_<b>_<SYM>_<timeframe>_<adjustment>_<start>_<end>.json`.
+
+`compare_market_providers.py` compares the Alpaca feed currently set in
+`providers.alpaca.feed`; it has no `--feed` option yet.
+
+Market response uses the default provider (Alpaca SIP) and writes
+`macro_market_response_alpaca-sip_raw*.{parquet,csv}`. Pass
+`--market-provider massive` (or the `--massive-dir` alias) for the
+Massive-based output, which keeps its original unsuffixed names.
 
 ## The MQL5 step is manual
 
@@ -152,11 +338,11 @@ treat as final — e.g. it touches "today"), or `failed`.
   (successfully collected, pending finalization) or in the future —
   what actually drives `update_data.py`'s exit code.
 - **Provisional windows are always retried**: the current Forex Factory
-  month and the trailing `revision_overlap_days` of Massive data are
+  month and the trailing `revision_overlap_days` of every market provider's data are
   never checkpointed "complete" — they're re-fetched on every run to
   catch late prints, corrections, and revisions.
 - **Validated before finalization, not just after sorting/dedup**: a
-  Massive chunk is only checkpointed `complete` if it passes
+  market-provider chunk (Massive, Alpaca, ...) is only checkpointed `complete` if it passes
   `validation.market.validate_market_bars` scoped to exactly that
   chunk's requested window (not the whole year) — non-finite/invalid
   OHLCV, unsorted/duplicate timestamps, or a missing NYSE session inside
@@ -179,13 +365,27 @@ treat as final — e.g. it touches "today"), or `failed`.
 - **Artifact integrity is checked, not assumed, and never blindly
   re-blessed**: before trusting a `complete`/`empty` entry, the manifest
   verifies the artifact file still exists and its checksum still
-  matches. If a shared Massive year-file is missing or corrupt, *every*
+  matches. If a shared market year-file is missing or corrupt, *every*
   checkpoint backed by it is invalidated up front — not just the one
   chunk being re-fetched — and after a rewrite, each sibling checkpoint
   is individually re-verified against the rebuilt file's actual rows
   before its checksum is refreshed; one that no longer has its claimed
-  data is invalidated instead of silently re-trusted.
-- **Durability**: Massive writes/checkpoints each month immediately
+  data is invalidated instead of silently re-trusted. "Still has its
+  claimed data" means the sibling's exact date range passes the **same
+  validation a fresh fetch is finalized with**:
+  - the provider's bar density and the configured timeframe apply;
+  - it is evaluated as of the entry's own acquisition time, so a
+    provisional window is not held to bars that were not yet due;
+  - a single surviving row is not enough;
+  - an `empty` entry stays valid only where the range has no NYSE session
+    and no rows.
+
+  This applies to `provisional` siblings too. Around a month boundary, two
+  provisional chunks (e.g. Sept and Oct on Oct 1–3) share one year file,
+  and rewriting one used to leave the other's checksum stale. A
+  provisional entry whose artifact is missing or altered is invalidated up
+  front, like a complete one.
+- **Durability**: every market provider writes/checkpoints each month immediately
   (not batched per year) — an interruption never loses already-fetched
   months. Forex Factory and FRED preserve every attempt (including
   failed ones) as its own immutable file, never overwriting a prior
@@ -260,6 +460,20 @@ are all preserved rather than overwriting each other.
 
 ## Known limitations / deferred work
 
+- **Alpaca adapter is live-verified** (2026-10-04, free Basic account), in addition to the fixture tests of the documented contract (`/v2/stocks/bars` reference, market-data FAQ, subscription plans; checked 2026-10-03). Confirmed live:
+  - field mapping (`t/o/h/l/c/v/n/vw`) and UTC `Z` timestamps at bar start, on the minute grid;
+  - New York day bounds and extended hours;
+  - multi-page `next_page_token` pagination;
+  - empty `bars` object on a holiday;
+  - historical SIP on Basic for 2016–2024.
+
+  Live responses carry no `currency` key, which the documentation shows; it is unused. Not yet seen live: an error response, and the recent-SIP 15-minute rejection. Alpaca's `asof` symbol-rename mapping is left at the provider default: META queries return FB history, unlike Massive's per-ticker behavior. Every manifest entry records `symbol_mapping: alpaca_default_asof_not_sent`, and a test pins this behavior. This is irrelevant for QQQ/SPY. Before adding renamed tickers, decide a security-identity policy (ticker-as-of-date vs. continuous security) and verify Alpaca's documented `asof` semantics; this is not guessed now.
+- **Credential redaction is a last line of defense** (`src/data/redaction.py`). It removes:
+  - the exact value of every credential env var the process holds;
+  - credential-shaped text: query/form parameters including URL-encoded ones, header lines, JSON and Python-repr pairs, Authorization/Bearer/Basic values.
+
+  It is applied at every boundary: fetch-layer log calls, every `Manifest.record` error string (all providers), CLI summaries, and a redacting filter on the CLI log handlers. Bare words containing "key" and ordinary numeric values are not touched.
+- **HTTP error messages are credential-redacted**: `requests` puts the full request URL into `HTTPError`/`ConnectionError` text, and Massive authenticates via `apiKey=` in the query string. Before this change, a real key could therefore reach log lines and manifest `error` fields. `http_utils.request_with_retry` now redacts query credentials and keeps the provider's error body instead. **Manifests written before this change may still contain a key in old `error` strings.** `data/manifests/` is gitignored, but rotate the key if that file was ever shared.
 - **Massive contract is documentation-verified, not fully live-verified**: a real (plan-limited) API key confirmed the exact endpoint, auth parameter, and field schema (`t/o/h/l/c/v/vw/n`, `status`, error shape) live — see the module docstring in `src/data/fetch/massive.py` — but 1-minute range-aggregate retrieval itself was blocked by that key's plan tier, so a full historical bar fetch has not been exercised live.
 - **MQL5 exporter: compiled and run, but never against live calendar data.** As of the eighth review, the exporter — and its four standalone self-tests (`DigestSelfTest.mq5`, `FileModeProbe.mq5`, `FileRecoverySelfTest.mq5`, `TailRecoverySelfTest.mq5`) — have actually been compiled (MetaEditor `/compile`) and executed (a scripted terminal `/config` startup) inside a real MetaTrader 5 terminal, all with 0 compiler errors/warnings and 100% self-test pass rates. See the exporter's own top-of-file "VERIFICATION STATUS" comment for the exact list of what that confirmed (real enum members, the UTF-8/digest round-trip, `FileOpen`/`FileSeek` truncation and positioning semantics, strict UTF-8 validation, and interrupted-write tail recovery). The self-tests call the exporter's own shared helpers directly via `mql5_exporter/CalendarExporterCore.mqh` — not hand-typed duplicates — so a passing self-test is evidence about the actual production code. This is genuine compiler/runtime evidence, not only the Python-simulation cross-check (`tests/_mql5_exporter_sim.py`, including an `ExclusiveFileHandleRegistry` that models "no two concurrently open handles to the same path"). **Still not exercised**: `CalendarValueHistory`/`CalendarEventById`/`CalendarCountryById` against a live MT5 terminal's actual calendar data — no calendar export, small or large, has been run in this environment, so end-to-end behavior against real API responses (as opposed to synthetic self-test fixtures) remains unverified. `FileMove`'s exact signature is now confirmed against official documentation (not memory), but its call sites are still only compiled, never exercised by a self-test. Manual verification procedure once you have MetaTrader access to a live calendar:
   1. **First export.** Run the main exporter once for a small range (e.g. `StartDate=2024.01.01`, `EndDate=2024.01.31`), confirm `us_macro_calendar.csv` and `us_macro_calendar.csv.windows.v5.csv` are created with real rows and one `OK` log line. If your calendar's country/currency selection includes any non-ASCII event names, open the CSV in a UTF-8-aware editor and confirm the text renders correctly (not mojibake).
