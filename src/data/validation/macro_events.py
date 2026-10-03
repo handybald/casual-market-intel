@@ -33,8 +33,24 @@ precision, so the official release-vintage value is rounded (half-up) to the cal
 before comparison -> ROUNDING_MATCH, exact equality -> EXACT_MATCH. The rounding is applied ONLY against
 the release vintage. Forex Factory vs MQL5 (both calendars) is compared exactly.
 
-TIMESTAMPS stay UNVERIFIABLE while the MQL5 UTC time is unresolved (broker timezone unconfirmed); an
-explicit `mql5_broker_timezone` in ValidationConfig resolves them for that run only.
+PRIOR PERIOD. For a release at time t about reference period R, `previous` describes R-1 as first
+published at the PREVIOUS release of the same indicator, and `revised_previous` describes R-1 as revised
+in THIS release. Both are validated against ALFRED vintages of R-1: `previous` against the vintage of the
+previous release date (taken from the calendar's own prior release of the same family), and
+`revised_previous` against the vintage of the current release date. Latest-revised values are never used,
+and the original MQL5 previous / revised_previous values are never overwritten.
+
+TIMEZONES. MQL5 timestamps are server-local times. They are UNVERIFIABLE until a broker timezone is
+supplied explicitly (`mql5_broker_timezone`; never inferred, never written to config). With a candidate
+timezone, every MQL5 time is converted (DST-aware) and compared with the TRUSTED (CONFIRMED) Forex Factory
+UTC time of the same release; `timezone_validation` aggregates the per-release deltas. Only when the
+aggregate is MATCH over at least `min_tz_evidence_releases` distinct releases may MQL5 times be used as
+trusted release timestamps (`trusted_release_timestamp_utc`); a CONFIRMED Forex Factory time always wins.
+The evidence must also be able to TELL A DST ZONE FROM A FIXED OFFSET: if the candidate zone changes its UTC
+offset during the evidence years, the evidence must contain releases under at least two different offsets.
+(Real example: Europe/Helsinki and a fixed UTC+3 both fit September 2025 perfectly, but over 2019-2020 the
+MQL5 export matched fixed UTC+3 on all 44 releases and Helsinki on only 28 -- the export does not follow
+Helsinki's winter time.) A wider `timezone_evidence` block computed over another window may be supplied.
 """
 from __future__ import annotations
 
@@ -45,7 +61,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..event_mapping import EventMapping
-from ..schemas import MacroEvent, ValueUnit
+from ..schemas import MacroEvent, TimestampQuality, ValueUnit
 
 # ---- overall per-event status (worst first) ----
 MATCH = "MATCH"
@@ -124,12 +140,16 @@ class ValidationConfig:
     max_vintage_lag_days: int = 3
     mql5_broker_timezone: Optional[str] = None   # explicit operator input only; never inferred
     date_fallback_days: int = 1
+    min_tz_evidence_releases: int = 2   # distinct trusted releases needed before a timezone counts as validated
     families: Tuple[str, ...] = SCOPE_FAMILIES
 
 
 ROW_FIELDS = [
     "canonical_event_id", "event_family", "event_name", "event_bundle",
+    "event_id", "ff_event_id", "mql5_event_id",
     "release_date", "release_date_basis", "release_timestamp", "release_timestamp_source", "reference_period",
+    "ff_release_timestamp_utc", "mql5_raw_timestamp", "candidate_broker_timezone", "mql5_converted_utc",
+    "timezone_validation_status", "trusted_release_timestamp_utc", "trusted_release_timestamp_basis",
     "ff_actual", "ff_provider_forecast", "ff_previous", "ff_revised_previous",
     "mql5_actual", "mql5_previous", "mql5_revised_previous", "mql5_forecast_diagnostic",
     "mql5_previous_differs_from_revised",
@@ -138,6 +158,10 @@ ROW_FIELDS = [
     "official_release_vintage_value", "official_unit",
     "official_latest_value", "official_latest_vintage_date", "official_latest_minus_release_vintage",
     "release_actual_match_status", "comparison_decimals", "actual_minus_official_release_vintage",
+    "previous_reference_period", "previous_prior_release_date",
+    "previous_official_release_vintage", "previous_official_vintage_date", "previous_validation_status",
+    "revised_previous_official_release_vintage", "revised_previous_official_vintage_date",
+    "revised_previous_validation_status", "official_prior_period_revision",
     "timestamp_status", "timestamp_delta_seconds", "mql5_implied_server_utc_offset_hours",
     "unit_status", "ff_unit", "mql5_unit",
     "source_match_status", "issues", "notes",
@@ -148,6 +172,8 @@ ROW_FIELDS = [
 class ReconciliationResult:
     rows: List[Dict[str, Any]]
     warnings: List[str]
+    timezone_validation: Dict[str, Any] = field(default_factory=dict)
+    timezone_evidence: Optional[Dict[str, Any]] = None      # block from a separate evidence window, if supplied
 
 
 # --------------------------------------------------------------------------- helpers
@@ -165,14 +191,42 @@ def _clean(v):
     return v
 
 
-def _mql5_utc(ev: MacroEvent, cfg: ValidationConfig) -> Tuple[Optional[dt.datetime], str]:
+def _mql5_utc(ev: MacroEvent, cfg: ValidationConfig,
+              reference_utc: Optional[dt.datetime] = None) -> Tuple[Optional[dt.datetime], str]:
     if ev.release_timestamp_utc is not None:
         return _aware(ev.release_timestamp_utc), "mql5.release_timestamp_utc"
     if ev.source_timestamp is not None and cfg.mql5_broker_timezone:
-        from zoneinfo import ZoneInfo
-        local = ev.source_timestamp.replace(tzinfo=ZoneInfo(cfg.mql5_broker_timezone))
-        return local.astimezone(dt.timezone.utc), f"mql5.source_timestamp@{cfg.mql5_broker_timezone} (operator-supplied)"
+        utc, note = convert_broker_local_to_utc(ev.source_timestamp, cfg.mql5_broker_timezone, reference_utc)
+        basis = f"mql5.source_timestamp@{cfg.mql5_broker_timezone} (operator-supplied)"
+        return utc, basis + (f"; {note}" if note else "")
     return None, "unresolved"
+
+
+def _ff_trusted_utc(ff: Optional[MacroEvent]) -> Optional[dt.datetime]:
+    """Forex Factory UTC time, only when the row's timestamp_quality is CONFIRMED."""
+    if ff is None or ff.release_timestamp_utc is None:
+        return None
+    quality = ff.timestamp_quality.value if hasattr(ff.timestamp_quality, "value") else ff.timestamp_quality
+    return _aware(ff.release_timestamp_utc) if quality == TimestampQuality.CONFIRMED.value else None
+
+
+def convert_broker_local_to_utc(naive: dt.datetime, tz_name: str,
+                                reference_utc: Optional[dt.datetime] = None) -> Tuple[dt.datetime, str]:
+    """Server-local naive time -> UTC using an IANA zone (DST-aware). Returns (utc, note).
+
+    A local time inside the autumn fall-back hour is ambiguous (two UTC instants): the instant closest to
+    `reference_utc` is chosen and the note says so. A spring-forward-gap time does not exist locally; it is
+    converted with the pre-transition offset and flagged."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(tz_name)
+    a = naive.replace(tzinfo=tz, fold=0).astimezone(dt.timezone.utc)
+    b = naive.replace(tzinfo=tz, fold=1).astimezone(dt.timezone.utc)
+    if a != b:
+        if a.astimezone(tz).replace(tzinfo=None) == naive and b.astimezone(tz).replace(tzinfo=None) == naive:
+            pick = min((a, b), key=lambda u: abs((u - reference_utc).total_seconds())) if reference_utc else a
+            return pick, "DST-ambiguous local time (fall-back hour)"
+        return a, "nonexistent local time (DST gap)"
+    return a, ""
 
 
 def _event_date(ev: MacroEvent, cfg: ValidationConfig) -> Optional[dt.date]:
@@ -224,6 +278,12 @@ def _decimals(x: float) -> int:
     return max(0, -exp)
 
 
+def _display_round(value: float, unit: str, cfg: ValidationConfig) -> float:
+    """Round half-up to the calendar display precision of `unit` (used to compare two OFFICIAL values)."""
+    quantum = Decimal(1).scaleb(-cfg.display_decimals.get(unit, 0))
+    return float(Decimal(repr(float(value))).quantize(quantum, rounding=ROUND_HALF_UP))
+
+
 def compare_to_release_vintage(actual: float, official: float, unit: str, cfg: ValidationConfig):
     """('EXACT_MATCH'|'ROUNDING_MATCH'|'VALUE_MISMATCH', decimals_used). `official` is rounded half-up to
     the calendar's display precision; call it ONLY with a release-vintage value."""
@@ -261,12 +321,15 @@ def resolve_release_vintage(asof_rows: Sequence[MacroEvent], release_date: Optio
             return VintageResolution(None, "AMBIGUOUS", f"conflicting as-of values for vintage {first}")
         return VintageResolution(at_first[0], "OK")
     dates = sorted({r.official_vintage_date for r in rows})
-    if all(d > latest_ok for d in dates):
-        return VintageResolution(None, "LOOKAHEAD_REJECTED",
-                                 f"as-of vintage(s) {', '.join(map(str, dates))} are later than the release "
-                                 f"{release_date} + {max_lag_days}d and may embed later revisions")
-    return VintageResolution(None, "PREDATES_RELEASE",
-                             f"as-of vintage(s) {', '.join(map(str, dates))} predate the release {release_date}")
+    late = [d for d in dates if d > latest_ok]
+    early = [d for d in dates if d < release_date]
+    parts = []
+    if early:
+        parts.append(f"as-of vintage(s) {', '.join(map(str, early))} predate the release {release_date}")
+    if late:
+        parts.append(f"as-of vintage(s) {', '.join(map(str, late))} are later than the release {release_date} + "
+                     f"{max_lag_days}d and may embed later revisions (look-ahead)")
+    return VintageResolution(None, "LOOKAHEAD_REJECTED" if late else "PREDATES_RELEASE", "; ".join(parts))
 
 
 # --------------------------------------------------------------------------- semantic checks
@@ -314,10 +377,44 @@ def _unique(rows: List[MacroEvent]) -> Tuple[Optional[MacroEvent], Optional[str]
     return (rows[0] if rows else None), None
 
 
+def _prev_month(d: dt.date) -> dt.date:
+    return dt.date(d.year - (d.month == 1), 12 if d.month == 1 else d.month - 1, 1)
+
+
+def _validate_prior(value, unit, vintage: Optional[MacroEvent], vres: "VintageResolution", cfg, flags, issues, label):
+    """Status for previous / revised_previous vs an official prior-period vintage. `value` is the calendar's
+    (MQL5) number; the official side is a release-time vintage, never a latest-revised value."""
+    if value is None:
+        return "NOT_APPLICABLE"
+    if vintage is None:
+        flags.add(OFFICIAL_VINTAGE_UNAVAILABLE)
+        issues.append(f"OFFICIAL_VINTAGE_UNAVAILABLE:{label} {vres.message}")
+        return OFFICIAL_VINTAGE_UNAVAILABLE
+    ou = _unit(vintage.official_actual_unit)
+    if UNKNOWN in (unit, ou) or unit != ou:
+        flags.add(UNIT_UNVERIFIED)
+        issues.append(f"UNIT_UNVERIFIED:{label} unit {unit} vs official {ou}, no comparison made")
+        return UNIT_UNVERIFIED
+    status, decimals = compare_to_release_vintage(value, vintage.official_actual, unit, cfg)
+    if status == VALUE_MISMATCH:
+        flags.add(VALUE_MISMATCH)
+        issues.append(f"VALUE_MISMATCH:{label} {value:.6g} vs official vintage {vintage.official_vintage_date} "
+                      f"value {vintage.official_actual:.6g}")
+    elif status == ROUNDING_MATCH:
+        issues.append(f"ROUNDING_MATCH:{label} official vintage {vintage.official_actual:.6g} rounds to {value} "
+                      f"at {decimals} decimal(s)")
+    return status
+
+
 def _build_row(family, ff: Optional[MacroEvent], m: Optional[MacroEvent], fred_rows: List[MacroEvent],
-               mapping: EventMapping, cfg: ValidationConfig, profiles, ambiguity: Optional[str]) -> Dict[str, Any]:
+               mapping: EventMapping, cfg: ValidationConfig, profiles, ambiguity: Optional[str],
+               prior_fred_rows: Optional[List[MacroEvent]] = None,
+               prior_release_date: Optional[dt.date] = None) -> Dict[str, Any]:
     ref = next((e.reference_period for e in (m, ff) if e is not None and e.reference_period), None)
     row = _blank(family, ref, mapping)
+    row["ff_event_id"] = ff.event_id if ff is not None else None
+    row["mql5_event_id"] = m.event_id if m is not None else None
+    row["event_id"] = f"macro:{row['canonical_event_id']}"
     issues: List[str] = []
     notes: List[str] = []
     flags = set()
@@ -431,7 +528,7 @@ def _build_row(family, ff: Optional[MacroEvent], m: Optional[MacroEvent], fred_r
         if UNKNOWN in (a_unit, f_unit) or a_unit != f_unit:
             issues.append("NOT_COMPARABLE:actual vs FF forecast (unit unknown or different, no delta computed)")
         else:
-            row["actual_minus_forecast"] = row["actual_value"] - row["ff_provider_forecast"]
+            row["actual_minus_forecast"] = round(row["actual_value"] - row["ff_provider_forecast"], 10)   # drop float noise
 
     # ---- release actual vs official RELEASE VINTAGE ----
     if vintage is not None:
@@ -453,6 +550,47 @@ def _build_row(family, ff: Optional[MacroEvent], m: Optional[MacroEvent], fred_r
                 issues.append(f"VALUE_MISMATCH:actual {row['actual_value']:.6g} vs official release vintage "
                               f"{row['official_release_vintage_value']:.6g} (vintage {row['official_vintage_date']})")
 
+    # ---- prior period (R-1): previous vs the vintage of the previous release, revised_previous vs this one ----
+    prev_ref = _prev_month(ref) if ref is not None else None
+    prior_asof = [r for r in (prior_fred_rows or []) if r.official_vintage_kind == "AS_OF"]
+    row["previous_reference_period"] = prev_ref.isoformat() if prev_ref else None
+    row["previous_prior_release_date"] = prior_release_date.isoformat() if prior_release_date else None
+    m_prev_unit = _unit(m.previous_unit) if m is not None else UNKNOWN
+    if ref is None:
+        none_res = VintageResolution(None, "NONE", "event has no reference_period, prior period unknown")
+        prev_res = rev_res = none_res
+    else:
+        prev_res = (resolve_release_vintage(prior_asof, prior_release_date, cfg.max_vintage_lag_days)
+                    if prior_release_date else
+                    VintageResolution(None, "NONE", "prior release date unknown, cannot anchor the previous vintage"))
+        rev_res = resolve_release_vintage(prior_asof, release_date, cfg.max_vintage_lag_days)
+    if prev_res.code == "AMBIGUOUS" or rev_res.code == "AMBIGUOUS":
+        flags.add(AMBIGUOUS_MATCH); issues.append("AMBIGUOUS:conflicting prior-period as-of values")
+    if prev_res.row is not None:
+        row.update(previous_official_release_vintage=_clean(prev_res.row.official_actual),
+                   previous_official_vintage_date=prev_res.row.official_vintage_date.isoformat())
+    if rev_res.row is not None:
+        row.update(revised_previous_official_release_vintage=_clean(rev_res.row.official_actual),
+                   revised_previous_official_vintage_date=rev_res.row.official_vintage_date.isoformat())
+    if m is None:
+        row["previous_validation_status"] = row["revised_previous_validation_status"] = "NOT_APPLICABLE"
+        notes.append("previous/revised_previous validated from MQL5 values; no MQL5 row")
+    else:
+        row["previous_validation_status"] = _validate_prior(row["mql5_previous"], m_prev_unit, prev_res.row,
+                                                            prev_res, cfg, flags, issues, "MQL5 previous")
+        row["revised_previous_validation_status"] = _validate_prior(row["mql5_revised_previous"], m_prev_unit,
+                                                                    rev_res.row, rev_res, cfg, flags, issues,
+                                                                    "MQL5 revised_previous")
+    if prev_res.row is not None and rev_res.row is not None:
+        row["official_prior_period_revision"] = row["revised_previous_official_release_vintage"] - row["previous_official_release_vintage"]
+        pu = _unit(prev_res.row.official_actual_unit)
+        if (row["mql5_revised_previous"] is None and pu == _unit(rev_res.row.official_actual_unit)
+                and _display_round(row["previous_official_release_vintage"], pu, cfg)
+                != _display_round(row["revised_previous_official_release_vintage"], pu, cfg)):
+            issues.append("PRIOR_REVISION_NOT_REPORTED:official prior-period value changed between the two release "
+                          f"vintages ({row['previous_official_release_vintage']:.6g} -> "
+                          f"{row['revised_previous_official_release_vintage']:.6g}) but the calendar reports no revised_previous")
+
     # ---- FF vs MQL5 cross-checks: previous and revised_previous stay separate fields ----
     if ff is not None and m is not None:
         for name, fa, ma, uf, um in (("actual", row["ff_actual"], row["mql5_actual"], row["ff_unit"], row["mql5_unit"]),
@@ -469,9 +607,15 @@ def _build_row(family, ff: Optional[MacroEvent], m: Optional[MacroEvent], fred_r
         if row["ff_revised_previous"] is None and row["mql5_revised_previous"] is not None:
             notes.append("revised_previous only present in MQL5")
 
-    # ---- timestamps ----
-    ff_utc = _aware(ff.release_timestamp_utc) if ff is not None and ff.release_timestamp_utc is not None else None
-    m_utc, m_basis = _mql5_utc(m, cfg) if m is not None else (None, "n/a")
+    # ---- timestamps / broker timezone ----
+    ff_utc = _ff_trusted_utc(ff)                       # trusted = CONFIRMED Forex Factory time only
+    m_utc, m_basis = _mql5_utc(m, cfg, ff_utc) if m is not None else (None, "n/a")
+    row["ff_release_timestamp_utc"] = ff_utc.isoformat() if ff_utc else None
+    row["candidate_broker_timezone"] = cfg.mql5_broker_timezone
+    if m is not None and m.source_timestamp is not None:
+        row["mql5_raw_timestamp"] = m.source_timestamp.isoformat()
+    if m_utc is not None:
+        row["mql5_converted_utc"] = m_utc.isoformat()
     if ff_utc is not None and m_utc is not None:
         delta = (m_utc - ff_utc).total_seconds()
         row["timestamp_delta_seconds"] = delta
@@ -480,10 +624,13 @@ def _build_row(family, ff: Optional[MacroEvent], m: Optional[MacroEvent], fred_r
             flags.add(TIMESTAMP_MISMATCH)
             issues.append(f"TIMESTAMP_MISMATCH:MQL5 {m_utc.isoformat()} vs FF {ff_utc.isoformat()} "
                           f"(delta {delta:+.0f}s, tolerance {cfg.timestamp_tolerance_seconds:.0f}s)")
+        if "DST" in m_basis:
+            notes.append(m_basis.split("; ", 1)[-1])
     elif ff is not None and m is not None:
         row["timestamp_status"] = "UNVERIFIABLE"
-        issues.append("TIMESTAMP_UNVERIFIABLE:" + ("MQL5 UTC timestamp unresolved (broker timezone not confirmed)"
-                                                    if m_utc is None else "Forex Factory UTC timestamp unresolved"))
+        why = ("MQL5 UTC timestamp unresolved (broker timezone not supplied/confirmed)" if m_utc is None
+               else "no CONFIRMED Forex Factory UTC timestamp to compare against")
+        issues.append("TIMESTAMP_UNVERIFIABLE:" + why)
         if m.source_timestamp is not None and ff_utc is not None:
             row["mql5_implied_server_utc_offset_hours"] = round(
                 (m.source_timestamp - ff_utc.replace(tzinfo=None)).total_seconds() / 3600, 4)
@@ -491,10 +638,13 @@ def _build_row(family, ff: Optional[MacroEvent], m: Optional[MacroEvent], fred_r
                          "not a confirmation of the broker timezone")
     else:
         row["timestamp_status"] = "N/A"
+    row["timezone_validation_status"] = row["timestamp_status"]
     if m_utc is not None:
         row.update(release_timestamp=m_utc.isoformat(), release_timestamp_source=m_basis)
     elif ff_utc is not None:
         row.update(release_timestamp=ff_utc.isoformat(), release_timestamp_source="ff.release_timestamp_utc (MQL5 UTC unresolved)")
+    if ff_utc is not None:
+        row.update(trusted_release_timestamp_utc=ff_utc.isoformat(), trusted_release_timestamp_basis="FF_CONFIRMED")
 
     status = next(s for s in STATUS_PRIORITY if s == MATCH or s in flags)
     row.update(source_match_status=status, issues=" | ".join(issues), notes=" | ".join(notes))
@@ -504,8 +654,11 @@ def _build_row(family, ff: Optional[MacroEvent], m: Optional[MacroEvent], fred_r
 # --------------------------------------------------------------------------- entry point
 def reconcile(ff_events: Sequence[MacroEvent], mql5_events: Sequence[MacroEvent], fred_events: Sequence[MacroEvent],
               start: dt.date, end: dt.date, mapping: EventMapping, cfg: ValidationConfig = ValidationConfig(),
-              fred_profiles: Optional[Dict[Tuple[str, str], FredSeriesProfile]] = None) -> ReconciliationResult:
-    """Rows = calendar releases (Forex Factory / MQL5) with release date in [start, end]; FRED enriches only."""
+              fred_profiles: Optional[Dict[Tuple[str, str], FredSeriesProfile]] = None,
+              timezone_evidence: Optional[Dict[str, Any]] = None) -> ReconciliationResult:
+    """`timezone_evidence`: a validate_broker_timezone() block computed over a (wider) evidence window; when given,
+    it -- not this window's own block -- decides whether MQL5 times are trusted.
+    Rows = calendar releases (Forex Factory / MQL5) with release date in [start, end]; FRED enriches only."""
     warnings: List[str] = []
     fams = set(cfg.families)
 
@@ -535,6 +688,24 @@ def reconcile(ff_events: Sequence[MacroEvent], mql5_events: Sequence[MacroEvent]
         if e.event_family in fams:
             fred_by_key.setdefault((e.event_family, e.reference_period), []).append(e)
 
+    # Release date of every (family, reference_period) the calendars know about -- also OUTSIDE the window --
+    # so the previous release of an indicator can anchor the vintage `previous` is validated against.
+    release_dates: Dict[Tuple[str, dt.date], dt.date] = {}
+    for events in (ff_events, mql5_events):          # Forex Factory (UTC) first, MQL5 only fills gaps
+        for e in events:
+            if e.event_family in fams and e.reference_period is not None:
+                d = _event_date(e, cfg)
+                if d is not None:
+                    release_dates.setdefault((e.event_family, e.reference_period), d)
+
+    # Indicators in one release bundle are published simultaneously (config/event_mapping.yaml), so a family
+    # without its own calendar history can borrow the prior release date of a bundle sibling (flagged in notes).
+    bundle_dates: Dict[Tuple[str, dt.date], dt.date] = {}
+    for (fam, ref_), d in release_dates.items():
+        entry_ = mapping.by_family(fam)
+        if entry_ and entry_.release_bundle:
+            bundle_dates.setdefault((entry_.release_bundle, ref_), d)
+
     rows: List[Dict[str, Any]] = []
     used = set()
     for comp in _components([("FF", e) for e in ff] + [("MQL5", e) for e in mq], cfg):
@@ -555,15 +726,97 @@ def reconcile(ff_events: Sequence[MacroEvent], mql5_events: Sequence[MacroEvent]
         ref = next((e.reference_period for e in (m, f) if e is not None and e.reference_period), None)
         fred_rows = fred_by_key.get((family, ref), []) if ref else []
         used.add((family, ref))
-        rows.append(_build_row(family, f, m, fred_rows, mapping, cfg, fred_profiles, None))
+        prev_ref = _prev_month(ref) if ref else None
+        if prev_ref:
+            used.add((family, prev_ref))
+        prior_rd = release_dates.get((family, prev_ref)) if prev_ref else None
+        via_bundle = False
+        if prev_ref and prior_rd is None:
+            entry_ = mapping.by_family(family)
+            if entry_ and entry_.release_bundle:
+                prior_rd = bundle_dates.get((entry_.release_bundle, prev_ref))
+                via_bundle = prior_rd is not None
+        row = _build_row(family, f, m, fred_rows, mapping, cfg, fred_profiles, None,
+                         prior_fred_rows=fred_by_key.get((family, prev_ref), []) if prev_ref else [],
+                         prior_release_date=prior_rd)
+        if via_bundle:
+            row["notes"] = (row["notes"] + " | " if row["notes"] else "") + (
+                f"previous release date {prior_rd} taken from a same-bundle indicator (no own calendar history)")
+        rows.append(row)
 
     unused = sum(len(v) for k, v in fred_by_key.items() if k not in used)
     if unused:
         warnings.append(f"{unused} FRED row(s) for reference periods with no calendar release in the window were "
                         "not used (other reference periods, e.g. transform lookback or observations released after the "
                         "window; FRED enriches calendar releases and never creates release events)")
-    rows.sort(key=lambda r: (r["release_timestamp"] or r["release_date"] or "9999", r["event_family"]))
-    return ReconciliationResult(rows, warnings)
+    tz = validate_broker_timezone(rows, cfg)
+    gate = timezone_evidence if timezone_evidence is not None else tz
+    for r in rows:      # trusted release timestamp: FF CONFIRMED (already set) > MQL5 under a VALIDATED timezone
+        if r["trusted_release_timestamp_utc"] is None and r["mql5_converted_utc"] is not None \
+                and gate["mql5_timestamps_trusted"] and gate["candidate_broker_timezone"] == cfg.mql5_broker_timezone:
+            r["trusted_release_timestamp_utc"] = r["mql5_converted_utc"]
+            r["trusted_release_timestamp_basis"] = f"MQL5_VALIDATED_BROKER_TZ:{cfg.mql5_broker_timezone}"
+    rows.sort(key=lambda r: (r["trusted_release_timestamp_utc"] or r["release_timestamp"] or r["release_date"] or "9999",
+                             r["event_family"]))
+    return ReconciliationResult(rows, warnings, tz)
+
+
+def _zone_changes_offset(tz_name: Optional[str], years) -> bool:
+    if not tz_name:
+        return False
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(tz_name)
+    return any(dt.datetime(y, 1, 1, 12, tzinfo=tz).utcoffset() != dt.datetime(y, 7, 1, 12, tzinfo=tz).utcoffset()
+               for y in years)
+
+
+def validate_broker_timezone(rows: Sequence[Dict[str, Any]], cfg: ValidationConfig) -> Dict[str, Any]:
+    """Aggregate verdict on the candidate broker timezone from the per-event comparisons.
+
+    Evidence = releases with BOTH a CONFIRMED Forex Factory UTC time and a converted MQL5 time. Status is
+    MATCH only if every such release agrees within tolerance, MISMATCH if any disagrees, UNVERIFIABLE if
+    there is no evidence (no timezone supplied, no MQL5 row, or no trusted Forex Factory time). Nothing is
+    written to config; this is a report."""
+    per_release: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        if r["timezone_validation_status"] not in ("MATCH", "MISMATCH"):
+            continue
+        key = r["ff_release_timestamp_utc"]
+        rec = per_release.setdefault(key, {"ff_confirmed_utc": key, "mql5_raw_timestamp": r["mql5_raw_timestamp"],
+                                            "candidate_broker_timezone": r["candidate_broker_timezone"],
+                                            "mql5_converted_utc": r["mql5_converted_utc"],
+                                            "delta_seconds": r["timestamp_delta_seconds"],
+                                            "status": r["timezone_validation_status"], "events": []})
+        rec["events"].append(r["canonical_event_id"])
+        if r["timezone_validation_status"] == "MISMATCH":
+            rec["status"] = "MISMATCH"
+    releases = [per_release[k] for k in sorted(per_release)]
+    n_bad = sum(1 for x in releases if x["status"] == "MISMATCH")
+    if not releases:
+        status = "UNVERIFIABLE"
+    else:
+        status = "MISMATCH" if n_bad else "MATCH"
+    offsets = sorted({round((dt.datetime.fromisoformat(x["mql5_raw_timestamp"])
+                             - dt.datetime.fromisoformat(x["mql5_converted_utc"]).replace(tzinfo=None)).total_seconds() / 3600, 4)
+                      for x in releases})
+    has_dst = _zone_changes_offset(cfg.mql5_broker_timezone, {dt.datetime.fromisoformat(x["ff_confirmed_utc"]).year
+                                                                for x in releases}) if releases else False
+    dst_covered = (len(offsets) >= 2) if has_dst else True
+    sufficient = len(releases) >= cfg.min_tz_evidence_releases and dst_covered
+    return {
+        "candidate_broker_timezone": cfg.mql5_broker_timezone, "status": status,
+        "distinct_trusted_releases": len(releases), "releases_matching": len(releases) - n_bad,
+        "releases_mismatching": n_bad, "min_evidence_releases": cfg.min_tz_evidence_releases,
+        "evidence_sufficient": sufficient, "observed_utc_offsets_hours": offsets,
+        "candidate_zone_has_dst_in_evidence_years": has_dst, "dst_regimes_covered": dst_covered,
+        "max_abs_delta_seconds": max((abs(x["delta_seconds"]) for x in releases), default=None),
+        "mql5_timestamps_trusted": bool(status == "MATCH" and sufficient and cfg.mql5_broker_timezone),
+        "per_release": releases,
+        "note": ("Consistency with trusted Forex Factory times is evidence, not proof of the broker's configuration; "
+                 "nothing is written to config."
+                 + ("" if dst_covered else " INSUFFICIENT: the candidate zone observes DST but every release falls under one "
+                    "UTC offset, so it cannot be distinguished from a fixed offset.")),
+    }
 
 
 def summarize(rows: Sequence[Dict[str, Any]], key: str = "source_match_status") -> Dict[str, int]:

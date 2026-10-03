@@ -32,9 +32,9 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.config import load_config  # noqa: E402
 from src.data.event_mapping import load_event_mapping  # noqa: E402
-from src.data.normalize.io import read_events  # noqa: E402
+from src.data.validation.macro_release_pipeline import run_macro_validation  # noqa: E402
 from src.data.validation.macro_events import (  # noqa: E402
-    MATCH, OFFICIAL_VINTAGE_UNAVAILABLE, ROW_FIELDS, SCOPE_FAMILIES, ValidationConfig, fred_profiles_from_config, reconcile, summarize,
+    MATCH, OFFICIAL_VINTAGE_UNAVAILABLE, ROW_FIELDS, SCOPE_FAMILIES, ValidationConfig, summarize,
 )
 
 
@@ -50,10 +50,12 @@ def _fmt(v: Any, width: int = 0) -> str:
 
 TABLE_COLUMNS = [
     ("event", "canonical_event_id", 31), ("release", "release_date", 10), ("ref", "reference_period", 10),
-    ("ff_fcst", "ff_provider_forecast", 7), ("actual", "actual_value", 7), ("prev", "mql5_previous", 6),
-    ("rev_prev", "mql5_revised_previous", 8), ("off_vintage", "official_release_vintage_value", 11),
-    ("off_latest", "official_latest_value", 10), ("actual_vs_official", "release_actual_match_status", 28),
-    ("ts", "timestamp_status", 12), ("unit", "unit_status", 10), ("status", "source_match_status", 28),
+    ("ff_fcst", "ff_provider_forecast", 7), ("actual", "actual_value", 7), ("off_vint", "official_release_vintage_value", 8),
+    ("actual_st", "release_actual_match_status", 14), ("prev", "mql5_previous", 6),
+    ("off_prev", "previous_official_release_vintage", 8), ("prev_st", "previous_validation_status", 14),
+    ("rev_prev", "mql5_revised_previous", 8), ("off_rev", "revised_previous_official_release_vintage", 8),
+    ("rev_st", "revised_previous_validation_status", 14), ("ts", "timestamp_status", 12), ("tdelta", "timestamp_delta_seconds", 6),
+    ("unit", "unit_status", 10), ("status", "source_match_status", 28),
 ]
 
 
@@ -69,27 +71,62 @@ def format_table(rows: Sequence[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def print_timezone_block(tz: Dict[str, Any]) -> None:
+    cand = tz.get("candidate_broker_timezone")
+    print(f"\nBroker timezone validation  candidate={cand or '(none supplied)'}  status={tz.get('status')}")
+    if not tz.get("per_release"):
+        print("  no evidence: needs a supplied --mql5-broker-timezone, MQL5 rows, and CONFIRMED Forex Factory times")
+        return
+    print(f"  distinct trusted releases: {tz['distinct_trusted_releases']} (need >= {tz['min_evidence_releases']}), "
+          f"matching={tz['releases_matching']}, mismatching={tz['releases_mismatching']}, "
+          f"max |delta|={tz['max_abs_delta_seconds']:.0f}s, observed UTC offsets={tz['observed_utc_offsets_hours']}, "
+          f"evidence sufficient={tz['evidence_sufficient']}, MQL5 times trusted: {tz['mql5_timestamps_trusted']}")
+    if not tz["dst_regimes_covered"]:
+        print("  NOTE: candidate zone observes DST but the evidence has a single UTC offset -> cannot be told apart from a fixed offset")
+    for r in tz["per_release"][:12]:
+        print(f"  {r['status']:8s} mql5_raw={r['mql5_raw_timestamp']}  -> {cand} -> {r['mql5_converted_utc']}  "
+              f"ff_utc={r['ff_confirmed_utc']}  delta={r['delta_seconds']:+.0f}s  ({len(r['events'])} event(s))")
+    if len(tz["per_release"]) > 12:
+        print(f"  ... {len(tz['per_release']) - 12} more release(s) in the report JSON")
+
+
+def _month_shift(d: dt.date, months: int) -> dt.date:
+    m = d.year * 12 + d.month - 1 + months
+    return dt.date(m // 12, m % 12 + 1, 1)
+
+
+def _asof_command(family: str, ref: dt.date, as_of: str) -> str:
+    """Observation window: 13 months before `ref` (12-month transforms need it) through the end of `ref`."""
+    end = _month_shift(ref, 1) - dt.timedelta(days=1)
+    return (f"python3 scripts/fetch_fred_asof.py --event-family {family} "
+            f"--observation-start {_month_shift(ref, -13)} --observation-end {end} --as-of {as_of}")
+
+
 def missing_vintage_commands(rows: Sequence[Dict[str, Any]]) -> List[str]:
-    """One scripts/fetch_fred_asof.py command per (family, release date) lacking a release vintage. The
-    observation window starts 13 months before the reference period so 12-month transforms can be computed."""
+    """One scripts/fetch_fred_asof.py command per distinct (family, reference period, as-of date) lacking a
+    release vintage: the release's own vintage, the previous release's vintage, and the vintage of the prior
+    period at the current release. This script never fetches; these are for the operator to run."""
     out, seen = [], set()
+
+    def add(family, ref_iso, as_of):
+        if not (ref_iso and as_of) or (family, ref_iso, as_of) in seen:
+            return
+        seen.add((family, ref_iso, as_of))
+        out.append(_asof_command(family, dt.date.fromisoformat(ref_iso), as_of))
+
     for r in rows:
-        if r["release_actual_match_status"] != OFFICIAL_VINTAGE_UNAVAILABLE or not r["reference_period"] or not r["release_date"]:
-            continue
-        key = (r["event_family"], r["release_date"])
-        if key in seen:
-            continue
-        seen.add(key)
-        ref = dt.date.fromisoformat(r["reference_period"])
-        months = ref.year * 12 + ref.month - 1 - 13
-        obs_start = dt.date(months // 12, months % 12 + 1, 1)
-        obs_end = (dt.date(ref.year + (ref.month == 12), ref.month % 12 + 1, 1) - dt.timedelta(days=1))
-        out.append(f"python3 scripts/fetch_fred_asof.py --event-family {r['event_family']} "
-                   f"--observation-start {obs_start} --observation-end {obs_end} --as-of {r['release_date']}")
+        f = r["event_family"]
+        if r["release_actual_match_status"] == OFFICIAL_VINTAGE_UNAVAILABLE:
+            add(f, r["reference_period"], r["release_date"])
+        if r["previous_validation_status"] == OFFICIAL_VINTAGE_UNAVAILABLE:
+            add(f, r["previous_reference_period"], r["previous_prior_release_date"])
+        if r["revised_previous_validation_status"] == OFFICIAL_VINTAGE_UNAVAILABLE:
+            add(f, r["previous_reference_period"], r["release_date"])
     return out
 
 
-def write_reports(rows: List[Dict[str, Any]], meta: Dict[str, Any], out_dir: Path, stem: str) -> List[Path]:
+def write_reports(rows: List[Dict[str, Any]], meta: Dict[str, Any], out_dir: Path, stem: str,
+                  tz: Optional[Dict[str, Any]] = None, tz_evidence: Optional[Dict[str, Any]] = None) -> List[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path, json_path = out_dir / f"{stem}.csv", out_dir / f"{stem}.json"
     with open(csv_path, "w", encoding="utf-8", newline="") as fh:
@@ -97,7 +134,7 @@ def write_reports(rows: List[Dict[str, Any]], meta: Dict[str, Any], out_dir: Pat
         w.writeheader()
         for r in rows:
             w.writerow({k: ("" if r.get(k) is None else r[k]) for k in ROW_FIELDS})
-    json_path.write_text(json.dumps({"meta": meta, "summary": summarize(rows), "rows": rows}, indent=2,
+    json_path.write_text(json.dumps({"meta": meta, "summary": summarize(rows), "timezone_validation": tz or {}, "timezone_evidence": tz_evidence, "rows": rows}, indent=2,
                                     default=str, allow_nan=False) + "\n", encoding="utf-8")
     return [csv_path, json_path]
 
@@ -121,6 +158,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "vintages are rejected as look-ahead (default 3)")
     p.add_argument("--mql5-broker-timezone", help="IANA tz of the MQL5 server clock (e.g. Europe/Helsinki); "
                    "used ONLY when MQL5 UTC timestamps are unresolved. Omit unless confirmed.")
+    p.add_argument("--timezone-evidence-start", help="YYYY-MM-DD: separate, wider window used to decide whether MQL5 "
+                   "times are trustworthy under --mql5-broker-timezone (default: the validation window itself)")
+    p.add_argument("--timezone-evidence-end", help="YYYY-MM-DD")
     p.add_argument("--strict", action="store_true", help="exit 1 unless every row is MATCH")
     return p
 
@@ -143,23 +183,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if unknown:
         print(f"ERROR: unknown event_family: {unknown}", file=sys.stderr)
         return 2
-    macro_dir = config.interim_root / "macro"
-    paths = {"forex_factory": args.ff_events or macro_dir / "forex_factory_events.parquet",
-             "mql5": args.mql5_events or macro_dir / "mql5_events.parquet",
-             "fred": args.fred_events or macro_dir / "fred_events.parquet"}
-    events = {}
-    for name, path in paths.items():
-        events[name] = read_events(path)
-        print(f"[macro validation] {name}: {len(events[name])} normalized rows from {path}"
-              + ("" if Path(path).exists() else "  (FILE NOT FOUND)"))
-
     cfg = ValidationConfig(timestamp_tolerance_seconds=args.timestamp_tolerance_seconds,
                            display_decimals={"PERCENT": args.percent_display_decimals,
                                              "THOUSANDS": args.thousands_display_decimals},
                            max_vintage_lag_days=args.vintage_max_lag_days,
                            mql5_broker_timezone=args.mql5_broker_timezone, families=families)
-    result = reconcile(events["forex_factory"], events["mql5"], events["fred"], start, end, mapping, cfg,
-                       fred_profiles_from_config(config))
+    ev_window = None
+    if args.timezone_evidence_start or args.timezone_evidence_end:
+        try:
+            ev_window = (dt.date.fromisoformat(args.timezone_evidence_start), dt.date.fromisoformat(args.timezone_evidence_end))
+        except (TypeError, ValueError):
+            print("ERROR: --timezone-evidence-start and --timezone-evidence-end must both be YYYY-MM-DD", file=sys.stderr)
+            return 2
+    result, paths, counts = run_macro_validation(
+        start, end, config=config, mapping=mapping, cfg=cfg,
+        paths={"forex_factory": args.ff_events, "mql5": args.mql5_events, "fred": args.fred_events},
+        timezone_evidence_window=ev_window)
+    for name, path in paths.items():
+        print(f"[macro validation] {name}: {counts[name]} normalized rows from {path}"
+              + ("" if Path(path).exists() else "  (FILE NOT FOUND)"))
     for w in result.warnings:
         print(f"[macro validation] WARNING: {w}")
 
@@ -167,8 +209,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(format_table(result.rows))
     counts = summarize(result.rows)
     print("\nOverall status:        " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    for label, key in (("previous vs official prior vintage", "previous_validation_status"),
+                       ("revised_previous vs official revised prior vintage", "revised_previous_validation_status")):
+        print(f"{label}: " + ", ".join(f"{k}={v}" for k, v in sorted(summarize(result.rows, key).items(), key=lambda kv: str(kv[0]))))
     print("Release actual vs official release vintage: "
           + ", ".join(f"{k}={v}" for k, v in sorted(summarize(result.rows, "release_actual_match_status").items(), key=lambda kv: str(kv[0]))))
+    print_timezone_block(result.timezone_validation)
+    if result.timezone_evidence is not None:
+        print(f"\nTimezone EVIDENCE window {ev_window[0]} -> {ev_window[1]} (decides MQL5 trust):")
+        print_timezone_block(result.timezone_evidence)
     problems = [r for r in result.rows if r["issues"]]
     if problems:
         print("\nIssues:")
@@ -193,7 +242,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "roles": {"forex_factory": "pre-release provider_forecast (not economist consensus)",
                       "mql5": "primary actual/previous/revised_previous/release time",
                       "fred": "official-value validation only; joined by reference_period"}}
-    written = write_reports(result.rows, meta, Path(report_dir), f"macro_validation_{start}_{end}")
+    written = write_reports(result.rows, meta, Path(report_dir), f"macro_validation_{start}_{end}", result.timezone_validation, result.timezone_evidence)
     print("\nReports:\n  " + "\n  ".join(str(p) for p in written))
     if args.strict and any(r["source_match_status"] != MATCH for r in result.rows):
         return 1
