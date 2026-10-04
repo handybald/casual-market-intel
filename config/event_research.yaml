@@ -1,0 +1,175 @@
+# Macro event -> surprise -> market response research specification.
+#
+# Every value here is part of the dataset's configuration hash (see
+# src/research/provenance.py); bump the relevant *_version on any change.
+# Nothing here was tuned on response data.
+
+spec_version: 2
+surprise_spec_version: 2      # v2: missing-forecast / near-zero-dispersion statuses, resolution-safe history
+response_feature_version: 2   # v2: excluded-event propagation, comparable-window volume baseline
+
+# Country / calendar source of every event in this layer.
+country: "US"
+event_source: "FOREX_FACTORY"       # point-in-time actual / forecast / previous as displayed
+release_time_precision: "scheduled_minute"   # Forex Factory times are minute-level; no seconds are invented
+
+# numeric_surprise_direction states ONLY what a positive (actual - forecast)
+# means numerically. It deliberately says nothing about market
+# interpretation (bullish/bearish), which is an empirical question.
+families:
+  CPI_MOM:
+    group: "CPI"
+    name: "CPI m/m"
+    frequency: "monthly"
+    publisher: "BLS"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = headline CPI m/m higher than forecast (hotter inflation print)"
+    relative_surprise: false
+  CPI_YOY:
+    group: "CPI"
+    name: "CPI y/y"
+    frequency: "monthly"
+    publisher: "BLS"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = headline CPI y/y higher than forecast (hotter inflation print)"
+    relative_surprise: false
+  CORE_CPI_MOM:
+    group: "CPI"
+    name: "Core CPI m/m"
+    frequency: "monthly"
+    publisher: "BLS"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = core CPI m/m higher than forecast (hotter inflation print)"
+    relative_surprise: false
+  CORE_CPI_YOY:
+    group: "CPI"
+    name: "Core CPI y/y"
+    frequency: "monthly"
+    publisher: "BLS"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = core CPI y/y higher than forecast (hotter inflation print)"
+    relative_surprise: false
+  NFP:
+    group: "EMPLOYMENT"
+    name: "Nonfarm Payrolls"
+    frequency: "monthly"
+    publisher: "BLS"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = more payroll jobs added than forecast (stronger employment print)"
+    # A level change in thousands of jobs: a ratio to the forecast is
+    # meaningful only for a positive forecast (sign flips and near-zero
+    # forecasts make it uninterpretable) -- otherwise null with a reason.
+    relative_surprise: true
+  UNEMPLOYMENT_RATE:
+    group: "EMPLOYMENT"
+    name: "Unemployment Rate"
+    frequency: "monthly"
+    publisher: "BLS"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = unemployment rate higher than forecast (weaker labour-market print)"
+    relative_surprise: false
+  AVG_HOURLY_EARNINGS_MOM:
+    group: "EMPLOYMENT"
+    name: "Average Hourly Earnings m/m"
+    frequency: "monthly"
+    publisher: "BLS"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = wage growth higher than forecast"
+    relative_surprise: false
+  CORE_PCE_MOM:
+    group: "PCE"
+    name: "Core PCE Price Index m/m"
+    frequency: "monthly"
+    publisher: "BEA"
+    expected_release_times_et: ["08:30", "10:00"]
+    numeric_surprise_direction: "positive = core PCE inflation higher than forecast"
+    relative_surprise: false
+  GDP_ADVANCE_QOQ:
+    group: "GDP"
+    name: "GDP q/q (advance)"
+    frequency: "quarterly"
+    publisher: "BEA"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = real GDP growth (annualised q/q) higher than forecast"
+    relative_surprise: false
+  GDP_PRELIM_QOQ:
+    group: "GDP"
+    name: "GDP q/q (second estimate)"
+    frequency: "quarterly"
+    publisher: "BEA"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = real GDP growth (annualised q/q) higher than forecast"
+    relative_surprise: false
+  GDP_FINAL_QOQ:
+    group: "GDP"
+    name: "GDP q/q (third estimate)"
+    frequency: "quarterly"
+    publisher: "BEA"
+    expected_release_times_et: ["08:30"]
+    numeric_surprise_direction: "positive = real GDP growth (annualised q/q) higher than forecast"
+    relative_surprise: false
+  FED_FUNDS_RATE:
+    group: "FOMC"
+    name: "FOMC policy rate decision (federal funds target, upper bound)"
+    frequency: "scheduled_meetings"
+    publisher: "FOMC"
+    # Scheduled statements are released at 14:00 ET; anything else (e.g. the
+    # March 2020 emergency actions) is flagged unscheduled, never treated as
+    # a scheduled decision.
+    expected_release_times_et: ["14:00"]
+    numeric_surprise_direction: "positive = policy rate set higher than forecast"
+    relative_surprise: false
+    # actual decision - Forex Factory forecast is almost always 0 (2 non-zero values in 2016-2026):
+    # NOT a robust monetary-policy surprise. A real measure needs a pre-decision market-implied
+    # expectation (fed funds futures, OIS, ...), which this repository does not have. FOMC
+    # market-response rows are kept; surprise-response inference must not rely on this proxy.
+    surprise_measure_quality: "weak_surprise_proxy"
+
+# Causal standardisation: (raw_t - mean(prior raw)) / std(prior raw), per
+# family, using only releases strictly earlier than t. ddof=1.
+standardization:
+  min_history: 12
+  # Historical dispersion is treated as zero when std <= this * max(1, max |prior surprise|):
+  # floating-point noise must never turn a constant history into a giant z-score.
+  zero_dispersion_rel_tol: 1.0e-9
+
+# Response windows, in minutes. Bar timestamps are interval STARTS.
+#   post h : reference price = close of the bar starting t-1m (price at t);
+#            bars t .. t+h-1  (so post 1m IS the release-minute bar)
+#   pre k  : reference price = close of the bar starting t-k-1m;
+#            bars t-k .. t-1
+windows:
+  pre_minutes: [60, 30, 15, 5, 1]
+  post_minutes: [1, 2, 5, 15, 30, 60]
+  # Volume baseline: search BACKWARD from the target session for up to `volume_baseline_sessions`
+  # VALID COMPARABLE windows: strictly earlier, same local clock window, the same per-minute
+  # session classification (pre-market / regular / after-hours -- so early-close days do not stand
+  # in for normal sessions), no known-exception registry hit, every bar present. Candidates are
+  # examined over at most `volume_baseline_max_lookback_sessions` sessions.
+  volume_baseline_sessions: 20
+  volume_baseline_min_sessions: 10
+  volume_baseline_max_lookback_sessions: 60
+
+# Expected response (first, auditable benchmark): expanding mean of the
+# same symbol / family / surprise-sign group's earlier post-window returns.
+baseline:
+  name: "expanding_family_sign_mean"
+  version: 1
+  min_history: 8
+  horizons: [1, 5, 15, 30, 60]
+  # Walk-forward / online expanding evaluation: every row's expectation uses all strictly earlier
+  # usable releases, INCLUDING earlier validation/test-period releases. It is not a model frozen on
+  # the development split, and residuals are not a standard holdout evaluation.
+  evaluation_paradigm: "walk_forward_online_expanding"
+
+# Chronological split by release timestamp (America/New_York dates, inclusive). Chosen on calendar
+# and per-family sample-size considerations (after inspecting event counts, before computing any
+# response statistic). NOT pre-registered. Used for descriptive reporting; no rule was tuned on
+# test-split performance.
+split:
+  version: 1
+  development: ["2016-01-01", "2020-12-31"]
+  validation: ["2021-01-01", "2022-12-31"]
+  test: ["2023-01-01", "2026-09-30"]
+  # Last date whose market data is non-provisional in the frozen dataset.
+  research_end: "2026-09-30"

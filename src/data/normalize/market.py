@@ -1,13 +1,17 @@
-"""Normalize raw Massive OHLCV parquet into the canonical interim layer.
+"""Normalize raw provider OHLCV parquet into the canonical interim layer.
 
-Raw (data/raw/massive/{symbol}/{timeframe}/{raw|adjusted}/{year}.parquet)
-already uses our column names because the OHLCV bar shape barely
-differs between providers and storing genuinely provider-raw JSON per
-1-minute bar for a decade would be enormous and useless (see
-architecture notes in fetch/massive.py). This step adds dtype
-enforcement, provenance columns, and canonical schema validation, and
-writes the result to data/interim/ -- raw files are never modified in
-place.
+Raw (`<provider raw dataset root>/{symbol}/{timeframe}/{adjustment}/{year}.parquet`,
+e.g. data/raw/massive/QQQ/1min/raw/2025.parquet or
+data/raw/alpaca/iex/QQQ/1min/raw/2025.parquet) already uses the canonical
+bar column names -- each provider adapter maps its native fields at fetch
+time, because the OHLCV bar shape barely differs between providers and
+storing genuinely provider-raw JSON per 1-minute bar for a decade would
+be enormous and useless. This step adds dtype enforcement, provenance
+columns (source, feed, feed_scope, adjustment, acquisition time, raw
+artifact path + checksum), and canonical schema validation, and writes
+the result to the provider's interim dataset root -- raw files are never
+modified in place. Optional provider fields (vwap, transactions) stay
+null when the provider did not supply them.
 """
 from __future__ import annotations
 
@@ -18,7 +22,9 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from ..config import AppConfig
+from ..config import AppConfig, REPO_ROOT
+from ..fetch.market_provider import MarketDataProvider, parse_timeframe
+from ..validation.market import timeframe_minutes_from_parts, timestamp_integrity
 from ..manifest import Manifest, checksum_file
 from ..schemas import MarketBar
 from ..timeutil import now_utc
@@ -26,14 +32,23 @@ from ..timeutil import now_utc
 logger = logging.getLogger(__name__)
 
 
-def _raw_path(config: AppConfig, symbol: str, timeframe: str, adjusted: bool, year: int) -> Path:
-    adj_label = "adjusted" if adjusted else "raw"
-    return config.provider_raw_dir("massive") / symbol / timeframe / adj_label / f"{year}.parquet"
+class CanonicalTimestampError(ValueError):
+    """Raw bars whose timestamps cannot enter the canonical (UTC-aware,
+    on-grid) market layer."""
 
 
-def _interim_path(config: AppConfig, symbol: str, timeframe: str, adjusted: bool, year: int) -> Path:
-    adj_label = "adjusted" if adjusted else "raw"
-    return config.interim_root / "massive" / symbol / timeframe / adj_label / f"{year}.parquet"
+def _default_provider(config: AppConfig, adjusted: Optional[bool]) -> MarketDataProvider:
+    """Massive, for callers written before the provider abstraction."""
+    from ..fetch.massive import MassiveProvider
+
+    return MassiveProvider(config, adjusted=adjusted)
+
+
+def _artifact_ref(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def normalize_market_year(
@@ -45,6 +60,7 @@ def normalize_market_year(
     acquisition_timestamp_utc: Optional[dt.datetime] = None,
     month_acquisition_map: Optional[Dict[int, dt.datetime]] = None,
     sample_validate: int = 50,
+    provider: Optional[MarketDataProvider] = None,
 ) -> pd.DataFrame:
     """`month_acquisition_map` (preferred, real-pipeline path): {month:
     retrieved_at} -- each row gets the acquisition time of the SPECIFIC
@@ -55,14 +71,16 @@ def normalize_market_year(
     supported as a lower-fidelity fallback for standalone/test use where
     no manifest/per-month breakdown is available; it also serves as the
     fallback for any month unexpectedly absent from `month_acquisition_map`.
-    """
-    provider_cfg = config.provider("massive")
-    timeframe = timeframe or config.market_timeframe
-    adjusted = provider_cfg.get("adjusted", False) if adjusted is None else adjusted
 
-    raw_path = _raw_path(config, symbol, timeframe, adjusted, year)
+    `provider` defaults to Massive (`adjusted` only applies to that default).
+    """
+    provider = provider or _default_provider(config, adjusted)
+    caps = provider.capabilities()
+    timeframe = timeframe or config.market_timeframe
+
+    raw_path = provider.year_path(symbol, timeframe, year)
     if not raw_path.exists():
-        raise FileNotFoundError(f"no raw Massive data for {symbol} {year} at {raw_path}")
+        raise FileNotFoundError(f"no raw {caps.source_label} data for {symbol} {year} at {raw_path}")
 
     # Single-value fallback default: file mtime, if the caller supplied
     # neither a per-month map nor an explicit single timestamp. Callers
@@ -74,7 +92,16 @@ def normalize_market_year(
         fallback_ts = dt.datetime.fromtimestamp(raw_path.stat().st_mtime, tz=dt.timezone.utc)
 
     df = pd.read_parquet(raw_path)
-    df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
+    # Canonical bars must be UTC-aware and on the bar grid. A naive or
+    # off-grid timestamp in the raw artifact is refused, never coerced
+    # (naive -> assumed UTC) or floored -- it stays visible as a defect.
+    naive, misaligned, ts = timestamp_integrity(df["timestamp_utc"], timeframe_minutes_from_parts(*parse_timeframe(timeframe)))
+    if naive or misaligned:
+        raise CanonicalTimestampError(
+            f"{raw_path}: {naive} timezone-naive and {misaligned} off-grid ({timeframe}) bar timestamps -- "
+            f"refusing to normalize into the canonical market layer"
+        )
+    df["timestamp_utc"] = ts
     for col in ("open", "high", "low", "close", "volume", "vwap"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -84,9 +111,11 @@ def normalize_market_year(
     df = df.sort_values("timestamp_utc").reset_index(drop=True)
 
     df["symbol"] = symbol
-    df["source"] = "MASSIVE"
+    df["source"] = caps.source_label
+    df["feed"] = caps.feed
+    df["feed_scope"] = caps.feed_scope
     df["timeframe"] = timeframe
-    df["adjustment"] = "adjusted" if adjusted else "raw"
+    df["adjustment"] = provider.adjustment_label
     if month_acquisition_map:
         row_months = df["timestamp_utc"].dt.month
         df["retrieval_timestamp_utc"] = [
@@ -96,16 +125,17 @@ def normalize_market_year(
         df["retrieval_timestamp_utc"] = fallback_ts
     df["normalized_at_utc"] = now_utc()
     df["raw_artifact_checksum"] = checksum_file(raw_path)
+    df["raw_artifact_path"] = _artifact_ref(raw_path)
 
     _spot_check_schema(df, symbol, sample_validate)
 
-    out_path = _interim_path(config, symbol, timeframe, adjusted, year)
+    out_path = provider.interim_year_path(symbol, timeframe, year)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_suffix(".parquet.tmp")
     df.to_parquet(tmp_path, index=False)
     tmp_path.replace(out_path)
 
-    logger.info("[normalize][Massive][%s] %d: %d bars -> %s", symbol, year, len(df), out_path)
+    logger.info("[normalize][%s][%s] %d: %d bars -> %s", caps.source_label, symbol, year, len(df), out_path)
     return df
 
 
@@ -131,6 +161,9 @@ def _spot_check_schema(df: pd.DataFrame, symbol: str, sample_size: int) -> None:
             timeframe=row["timeframe"],
             adjustment=row["adjustment"],
             source=row["source"],
+            feed=row["feed"],
+            feed_scope=row["feed_scope"],
+            raw_artifact_checksum=row["raw_artifact_checksum"],
             retrieval_timestamp_utc=row["retrieval_timestamp_utc"],
             normalized_at_utc=row["normalized_at_utc"],
         )
@@ -143,23 +176,22 @@ def normalize_market_symbol(
     end_date: dt.date,
     timeframe: Optional[str] = None,
     manifest: Optional[Manifest] = None,
+    provider: Optional[MarketDataProvider] = None,
 ) -> List[pd.DataFrame]:
-    provider_cfg = config.provider("massive")
+    provider = provider or _default_provider(config, None)
+    label = provider.capabilities().source_label
     timeframe = timeframe or config.market_timeframe
-    adjusted = bool(provider_cfg.get("adjusted", False))
     frames = []
     for year in range(start_date.year, end_date.year + 1):
-        raw_path = _raw_path(config, symbol, timeframe, adjusted, year)
+        raw_path = provider.year_path(symbol, timeframe, year)
         if not raw_path.exists():
-            logger.warning("[normalize][Massive][%s] no raw data for %d, skipping", symbol, year)
+            logger.warning("[normalize][%s][%s] no raw data for %d, skipping", label, symbol, year)
             continue
         month_acquisition_map: Dict[int, dt.datetime] = {}
         fallback_ts = None
         if manifest is not None:
-            from ..fetch.massive import cache_key
-
-            key = cache_key(symbol, timeframe, adjusted)
-            entries = [e for e in manifest.entries_for("massive", key) if e.start.startswith(str(year))]
+            key = provider.cache_key(symbol, timeframe)
+            entries = [e for e in manifest.entries_for(provider.name, key) if e.start.startswith(str(year))]
             for e in entries:
                 # Each manifest entry's OWN retrieved_at -- the actual
                 # chunk it came from -- not a single collapsed value for
@@ -171,9 +203,10 @@ def normalize_market_symbol(
                 fallback_ts = dt.datetime.fromisoformat(max(e.retrieved_at for e in entries))
         frames.append(
             normalize_market_year(
-                config, symbol, year, timeframe, adjusted,
+                config, symbol, year, timeframe,
                 acquisition_timestamp_utc=fallback_ts,
                 month_acquisition_map=month_acquisition_map or None,
+                provider=provider,
             )
         )
     return frames

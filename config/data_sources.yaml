@@ -12,8 +12,25 @@ macro:
   currency: "USD"
 
 market:
-  provider: "massive"
+  # SOURCE POLICY (see README "Market data providers"):
+  #   canonical 1-minute OHLC, volume and VWAP = Alpaca SIP (providers.alpaca.feed: "sip", raw)
+  #   Massive    = validation/reference provider only (explicit `--sources massive`)
+  #   Alpaca IEX = sparse single-venue sanity check only (feed: "iex", stored separately)
+  # Primary market provider: what downstream consumers (e.g.
+  # scripts/build_macro_market_response.py) read when no provider is named.
+  provider: "alpaca"
+  # Market providers fetched by default by fetch_historical_data.py /
+  # update_data.py when --sources is not given. Each provider's data is
+  # stored and checkpointed separately (provider + feed + adjustment are
+  # part of the dataset identity) -- providers are never merged. Massive
+  # is not fetched by default; `--sources massive` still works.
+  providers:
+    - "alpaca"
   timeframe: "1min"
+  # Known market-data exceptions (provider gaps, market-wide halts, ...):
+  # classified, never filled. See src/data/market_exceptions.py. Used by
+  # fetch-time and stored-data validation; part of the dataset fingerprint.
+  exception_registry: "config/market_exceptions.yaml"
   symbols:
     - "QQQ"
     - "SPY"
@@ -100,6 +117,35 @@ providers:
     # Bounded trailing re-fetch (in calendar days) applied on every run to
     # the most recent stored data, to catch late prints/corrections to
     # sessions that were provisional when first fetched.
+    revision_overlap_days: 3
+
+  alpaca:
+    # Alpaca Market Data API v2 historical bars -- see src/data/fetch/alpaca.py
+    # for the documented contract this relies on. Credentials:
+    # APCA_API_KEY_ID / APCA_API_SECRET_KEY (environment / .env only).
+    chunk_frequency: "month"
+    raw_dir: "data/raw/alpaca"     # data is stored under <raw_dir>/<feed>/...
+    base_url: "https://data.alpaca.markets"
+    # MUST be explicit: the API's implicit default is "the best feed your
+    # subscription allows", which would make stored data depend on whose
+    # key ran the fetch.
+    #   iex -- single exchange (~2.5% of US volume per Alpaca docs). Free.
+    #          NOT consolidated: volume and prices are IEX-only prints.
+    #   sip -- all US exchanges (consolidated). CANONICAL research feed.
+    #          Historical SIP on the free Basic plan was live-verified
+    #          2026-10-04 for 2016-03-15, 2017-06-15 and 2024-10-02 /
+    #          11-06 / 11-28 (holiday) / 11-29 (early close); the API
+    #          rejects SIP requests whose `end` is < 15 min old, which
+    #          `entitlement: "basic"` below caps automatically.
+    feed: "sip"
+    adjustment: "raw"              # raw | split | dividend | spin-off | all
+    # "basic" (free) caps SIP requests 16 minutes before now, per the
+    # documented recent-SIP restriction; set "algo_trader_plus" if your
+    # account has the paid plan.
+    entitlement: "basic"
+    page_limit: 10000              # documented max per page
+    max_retries: 5
+    request_delay_seconds: 0.35    # Basic plan: 200 requests/min
     revision_overlap_days: 3
 
   fred:

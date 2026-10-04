@@ -53,6 +53,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from src.data.config import AppConfig
 from src.data.manifest import Manifest
 from src.data.fetch import massive as m
+from src.data.fetch import market_provider
 from src.data.validation.market import (
     UnsupportedTimeframeError,
     nyse_sessions,
@@ -167,7 +168,7 @@ def test_unit_standalone_and_fetch_time_validation_agree_for_five_minute_data():
     df = pd.DataFrame(bars, columns=m.BAR_COLUMNS)
 
     standalone = validate_market_bars(df, "QQQ", dt.date(2020, 1, 2), dt.date(2020, 1, 2), timeframe_minutes=5)
-    fetch_time = m._validate_window(bars, "QQQ", dt.date(2020, 1, 2), dt.date(2020, 1, 2), timeframe_minutes=5)
+    fetch_time = market_provider.validate_window(bars, "QQQ", dt.date(2020, 1, 2), dt.date(2020, 1, 2), timeframe_minutes=5)
 
     assert standalone.is_hard_failure == fetch_time.is_hard_failure == False
     assert standalone.is_clean == fetch_time.is_clean

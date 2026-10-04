@@ -65,7 +65,43 @@ class AppConfig:
     def market_timeframe(self) -> str:
         return self._raw["market"]["timeframe"]
 
+    @property
+    def primary_market_provider(self) -> str:
+        """The market provider downstream consumers (e.g. market-response
+        features) read by default. `market.provider` -- the original,
+        single-provider key -- keeps this meaning."""
+        market = self._raw["market"]
+        if market.get("provider"):
+            return market["provider"]
+        return self.market_providers[0]
+
+    @property
+    def market_providers(self) -> List[str]:
+        """Market providers fetched by default (bootstrap/update when
+        `--sources` is not given). Falls back to `[market.provider]` for
+        configs written before `market.providers` existed."""
+        market = self._raw["market"]
+        providers = market.get("providers")
+        if providers:
+            return list(providers)
+        return [market["provider"]]
+
+    @property
+    def market_exception_registry_path(self) -> Optional[Path]:
+        """Known market-exception registry (see src/data/market_exceptions.py);
+        None when the config does not name one."""
+        rel = self._raw.get("market", {}).get("exception_registry")
+        return self.resolve_path(rel) if rel else None
+
     # -- storage ---------------------------------------------------------
+    def relative_to_repo(self, path: Path) -> str:
+        """Repository-relative identifier for an artifact (absolute paths are
+        machine-specific and must not enter scientific identities)."""
+        try:
+            return Path(path).resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+        except ValueError:
+            return Path(path).as_posix()
+
     def resolve_path(self, relative: str) -> Path:
         p = Path(relative)
         return p if p.is_absolute() else (REPO_ROOT / p)
@@ -92,6 +128,9 @@ class AppConfig:
     # -- providers ---------------------------------------------------------
     def provider(self, name: str) -> Dict[str, Any]:
         return self._raw["providers"][name]
+
+    def has_provider(self, name: str) -> bool:
+        return name in self._raw.get("providers", {})
 
     def provider_raw_dir(self, name: str) -> Path:
         return self._resolve(self.provider(name)["raw_dir"])
