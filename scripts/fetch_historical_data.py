@@ -198,7 +198,8 @@ def run_market_provider(config, manifest, provider_name, symbols, start, end, fo
         bars = sum(r.rows for r in results)
         failed = [r for r in results if r.status == "failed"]
         any_failed = any_failed or bool(failed)
-        summary[symbol] = {"bars_fetched": bars, "failed_months": len(failed)}
+        summary[symbol] = {"bars_fetched": bars, "failed_months": len(failed),
+                           "months_with_known_gaps": sum(r.status == "complete_with_known_gaps" for r in results)}
         try:
             normalize_market_symbol(config, symbol, start, end, manifest=manifest, provider=provider)
         except FileNotFoundError as exc:

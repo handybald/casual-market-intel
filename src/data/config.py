@@ -86,7 +86,22 @@ class AppConfig:
             return list(providers)
         return [market["provider"]]
 
+    @property
+    def market_exception_registry_path(self) -> Optional[Path]:
+        """Known market-exception registry (see src/data/market_exceptions.py);
+        None when the config does not name one."""
+        rel = self._raw.get("market", {}).get("exception_registry")
+        return self.resolve_path(rel) if rel else None
+
     # -- storage ---------------------------------------------------------
+    def relative_to_repo(self, path: Path) -> str:
+        """Repository-relative identifier for an artifact (absolute paths are
+        machine-specific and must not enter scientific identities)."""
+        try:
+            return Path(path).resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+        except ValueError:
+            return Path(path).as_posix()
+
     def resolve_path(self, relative: str) -> Path:
         p = Path(relative)
         return p if p.is_absolute() else (REPO_ROOT / p)

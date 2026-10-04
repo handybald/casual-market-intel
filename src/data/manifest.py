@@ -10,6 +10,13 @@ keys are "{symbol}:{timeframe}:{adjustment}", not just the symbol, so a
 Status values and what they mean for resume/watermark logic:
   "complete"    finalized, verified coverage for [start, end]. Counts
                 toward the completion watermark and is skipped on rerun.
+  "complete_with_known_gaps"
+                finalized like "complete" (operationally resolved: skipped on
+                rerun, counts toward the watermark) BUT scientifically
+                incomplete: some minutes are missing and every one of them
+                is explained by a registered, non-retryable provider_gap in
+                the market exception registry, whose ids are recorded in
+                `known_exception_ids`. Never reported as clean/complete data.
   "empty"       finalized, verified ABSENCE of data for [start, end]
                 (e.g. a market holiday, or a FRED window before a series
                 started). Also counts toward the watermark.
@@ -42,7 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .redaction import redact_secrets
 
-VERIFIED_STATUSES = ("complete", "empty")
+VERIFIED_STATUSES = ("complete", "complete_with_known_gaps", "empty")
 RETRYABLE_STATUSES = ("failed", "provisional")
 
 
@@ -68,7 +75,7 @@ class ManifestEntry:
     key: str
     start: str  # ISO date, inclusive
     end: str  # ISO date, inclusive
-    status: str  # "complete" | "provisional" | "empty" | "failed"
+    status: str  # "complete" | "complete_with_known_gaps" | "provisional" | "empty" | "failed"
     rows: int = 0
     retrieved_at: str = field(default_factory=utcnow_iso)
     # Set only when an entry's checksum is refreshed by a sibling-
@@ -84,6 +91,11 @@ class ManifestEntry:
     # Opaque, provider-specific audit metadata (e.g. {"timeframe": "1min",
     # "adjustment": "raw"}). Never interpreted by Manifest itself.
     request_meta: Dict[str, Any] = field(default_factory=dict)
+    # Market exception registry ids (src/data/market_exceptions.py) that
+    # explain this entry's missing minutes. Non-empty exactly when the
+    # status is "complete_with_known_gaps" (or a provisional chunk that
+    # already contains registered gaps).
+    known_exception_ids: List[str] = field(default_factory=list)
 
     def composite_key(self) -> str:
         return f"{self.provider}:{self.key}:{self.start}:{self.end}"
@@ -128,6 +140,7 @@ class Manifest:
         for item in raw.get("entries", []):
             item.setdefault("request_meta", {})
             item.setdefault("verified_at", None)
+            item.setdefault("known_exception_ids", [])
             entry = ManifestEntry(**item)
             self._entries[entry.composite_key()] = entry
 

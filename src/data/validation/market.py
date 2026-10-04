@@ -47,11 +47,16 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 import pandas_market_calendars as mcal
+
+from ..market_exceptions import EXCLUDED_FROM_EXPECTED
+
+if TYPE_CHECKING:
+    from ..market_exceptions import MarketException
 
 _NYSE = mcal.get_calendar("NYSE")
 
@@ -152,6 +157,15 @@ class MarketValidationReport:
     expected_regular_minutes: int = 0  # sum of ELAPSED expected minutes only (early-close and as-of aware)
     regular_hours_coverage_ratio: float = 0.0
 
+    # -- known-exception accounting (only populated when a registry is passed) --
+    excluded_regular_minutes: int = 0  # halt / exchange-closed / no-trade minutes removed from the expected grid
+    excluded_minutes_by_class: Dict[str, int] = field(default_factory=dict)
+    known_gap_minutes: int = 0  # missing minutes explained by a registered, non-retryable provider_gap (still missing!)
+    known_gap_sessions: List[str] = field(default_factory=list)
+    unexplained_missing_minutes: int = 0  # missing tradable minutes NOT covered by any registry entry
+    applied_exception_ids: List[str] = field(default_factory=list)
+    stale_exception_ids: List[str] = field(default_factory=list)  # registered no-bar intervals that DO have bars
+
     macro_windows_checked: int = 0
     macro_required_offsets_minutes: List[int] = field(default_factory=lambda: list(DEFAULT_MACRO_REQUIRED_OFFSETS_MINUTES))
     macro_windows_missing_coverage: List[str] = field(default_factory=list)  # release ISO datetimes missing >=1 required offset
@@ -175,6 +189,7 @@ class MarketValidationReport:
             and not self.sessions_missing_open_edge
             and not self.sessions_missing_close_edge
             and not self.macro_windows_missing_coverage
+            and self.known_gap_minutes == 0  # a registered gap is still a gap: never "clean"
         )
 
     @property
@@ -244,6 +259,13 @@ class MarketValidationReport:
             "min_session_completeness_ratio": self.min_session_completeness_ratio,
             "bar_density": self.bar_density,
             "expected_regular_minutes": self.expected_regular_minutes,
+            "excluded_regular_minutes": self.excluded_regular_minutes,
+            "excluded_minutes_by_class": self.excluded_minutes_by_class,
+            "known_gap_minutes": self.known_gap_minutes,
+            "known_gap_sessions": self.known_gap_sessions,
+            "unexplained_missing_minutes": self.unexplained_missing_minutes,
+            "applied_exception_ids": self.applied_exception_ids,
+            "stale_exception_ids": self.stale_exception_ids,
             "regular_hours_coverage_ratio": self.regular_hours_coverage_ratio,
             "macro_windows_checked": self.macro_windows_checked,
             "macro_required_offsets_minutes": self.macro_required_offsets_minutes,
@@ -324,6 +346,7 @@ def validate_market_bars(
     as_of: Optional[dt.datetime] = None,
     min_session_completeness_ratio: float = DEFAULT_MIN_SESSION_COMPLETENESS_RATIO,
     bar_density: str = BAR_DENSITY_DENSE,
+    exceptions: Optional[Sequence["MarketException"]] = None,
 ) -> MarketValidationReport:
     """Validate `df` (expected to already be clipped to [start, end], but
     not required to be -- rows outside the range simply don't match any
@@ -342,6 +365,15 @@ def validate_market_bars(
     from each release timestamp that must ALL have a bar present -- not
     "at least N bars somewhere nearby". A window is only satisfied when
     every required offset is covered.
+
+    `exceptions`: registry entries already filtered to this dataset
+    (`MarketExceptionRegistry.for_dataset`). Minutes inside
+    market_wide_halt / exchange_closed / legitimate_no_trade_interval
+    entries are removed from the expected grid; missing minutes inside a
+    non-retryable provider_gap are counted as `known_gap_minutes` (still
+    missing, `is_clean` stays False) rather than as unexplained gaps, so
+    they do not by themselves make the session a hard failure. Everything
+    else is judged exactly as without a registry.
 
     COARSE-BAR PRECISION NOTE: each offset's "hit" check looks for a bar
     starting in [release_ts + offset, release_ts + offset + timeframe) --
@@ -425,6 +457,8 @@ def validate_market_bars(
     # with EXPLICIT expected-minute grids and as-of-aware elapsed windows --
     sessions = nyse_sessions(start, end)
     timeframe = dt.timedelta(minutes=timeframe_minutes)
+    exc_entries = [e for e in (exceptions or ()) if e.active]
+    applied_ids, stale_ids, excluded_by_class = set(), set(), {}
 
     regular_hits = 0
     gaps_all: List[float] = []
@@ -447,41 +481,67 @@ def validate_market_bars(
         expected_sessions_count += 1
         regular_hits += len(in_session)
 
-        # Explicit expected-minute grid for the ELAPSED portion only.
-        expected_minutes = []
-        t = open_utc
-        while t < elapsed_close:
-            expected_minutes.append(t)
-            t += timeframe
-        expected_count = len(expected_minutes)
-        report.expected_regular_minutes += expected_count
-
-        # A bar "covers" expected slot i (= [open + i*tf, open + (i+1)*tf))
-        # iff it starts inside that slot. Every elapsed in-session bar lies
-        # in exactly one slot, so the covered set is computed in O(bars)
-        # (it used to be an O(slots x bars) scan -- identical result).
+        # Explicit expected-minute grid for the ELAPSED portion only:
+        # slot i = [open + i*tf, open + (i+1)*tf).
         tf_ns = int(timeframe / dt.timedelta(microseconds=1)) * 1000
         open_ns = pd.Timestamp(open_utc).value
-        covered_slots = {int((p.value - open_ns) // tf_ns) for p in elapsed_bars}
-        covered = sum(1 for i in covered_slots if 0 <= i < expected_count)
-        first_missing_open = expected_count > 0 and 0 not in covered_slots
-        last_missing_close = expected_count > 1 and (expected_count - 1) not in covered_slots
+        expected_count = max(0, -(-(pd.Timestamp(elapsed_close).value - open_ns) // tf_ns))
 
-        completeness = (covered / expected_count) if expected_count else 1.0
+        # A bar covers slot i iff it starts inside it. Every elapsed
+        # in-session bar lies in exactly one slot -> O(bars).
+        covered_slots = {int((p.value - open_ns) // tf_ns) for p in elapsed_bars}
+        covered_slots = {i for i in covered_slots if 0 <= i < expected_count}
+
+        # Registered exceptions: slots whose START lies in [start, end).
+        excluded_slots, known_gap_slots = set(), set()
+        for exc in exc_entries:
+            lo = pd.Timestamp(exc.start_utc).value
+            hi = pd.Timestamp(exc.end_utc).value
+            if hi <= open_ns or lo >= open_ns + expected_count * tf_ns:
+                continue
+            first = max(0, -(-(lo - open_ns) // tf_ns))
+            last = min(expected_count, -(-(hi - open_ns) // tf_ns))
+            slots = set(range(first, last))
+            if not slots:
+                continue
+            applied_ids.add(exc.id)
+            if slots & covered_slots and exc.classification.value != "temporary_fetch_failure":
+                stale_ids.add(exc.id)  # registered as bar-less, but bars exist
+            if exc.classification in EXCLUDED_FROM_EXPECTED:
+                excluded_slots |= slots
+                excluded_by_class[exc.classification.value] = excluded_by_class.get(exc.classification.value, 0) + len(slots)
+            elif exc.explains_missing_data:
+                known_gap_slots |= slots
+
+        tradable = expected_count - len(excluded_slots)
+        missing = set(range(expected_count)) - covered_slots - excluded_slots
+        known_missing = missing & known_gap_slots
+        unexplained = missing - known_missing
+        covered = len(covered_slots - excluded_slots)
+        report.expected_regular_minutes += tradable
+        report.excluded_regular_minutes += len(excluded_slots)
+        report.known_gap_minutes += len(known_missing)
+        report.unexplained_missing_minutes += len(unexplained)
+
+        judged = tradable - len(known_missing)  # minutes the session can still be judged on
+        completeness = (covered / judged) if judged > 0 else 1.0
+        first_missing_open = expected_count > 0 and 0 in unexplained
+        last_missing_close = expected_count > 1 and (expected_count - 1) in unexplained
 
         if is_in_progress:
             report.provisional_sessions.append(date_str)
-        elif expected_count == 0:
-            # Elapsed session with zero expected minutes (shouldn't
-            # normally happen for a real NYSE session, but keep this
-            # branch honest rather than dividing by zero).
+        elif expected_count == 0 or tradable == 0:
+            # Nothing was due (zero-length elapsed session, or every minute
+            # registered as halted / closed) -- nothing to judge.
             continue
-        elif covered == 0:
+        elif covered == 0 and len(unexplained) == tradable:
             report.missing_sessions.append(date_str)
         elif completeness < min_session_completeness_ratio:
             report.incomplete_sessions.append(date_str)
         else:
             report.trading_sessions_with_data += 1
+        if known_missing and not is_in_progress:
+            report.known_gap_sessions.append(date_str)
 
         if not is_in_progress:
             if first_missing_open:
@@ -495,6 +555,18 @@ def validate_market_bars(
         gaps_all.extend(session_gaps.tolist())
 
     report.expected_trading_sessions = expected_sessions_count
+    report.applied_exception_ids = sorted(applied_ids)
+    report.stale_exception_ids = sorted(stale_ids)
+    report.excluded_minutes_by_class = dict(sorted(excluded_by_class.items()))
+    if report.known_gap_sessions:
+        report.issues.append(
+            f"{report.known_gap_minutes} missing minute(s) in {len(report.known_gap_sessions)} session(s) are "
+            f"REGISTERED provider gaps (still missing; not filled) (first: {report.known_gap_sessions[0]})"
+        )
+    if report.stale_exception_ids:
+        report.issues.append(
+            f"registered no-bar interval(s) contain bars -- registry may be stale: {report.stale_exception_ids}"
+        )
     report.regular_hours_rows = regular_hits
     report.extended_hours_rows = report.total_rows - regular_hits
     report.gap_count = len(gaps_all)

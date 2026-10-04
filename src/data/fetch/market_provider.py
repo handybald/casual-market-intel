@@ -49,6 +49,7 @@ import requests
 from ..config import AppConfig
 from ..dates import iter_date_chunks
 from ..manifest import Manifest, ManifestEntry, checksum_file, utcnow_iso
+from ..market_exceptions import MarketException, load_registry_for_config
 from ..redaction import redact_secrets
 from ..validation.market import (
     BAR_DENSITY_DENSE,
@@ -83,7 +84,7 @@ class MonthResult(NamedTuple):
     symbol: str
     year: int
     month: int
-    status: str  # "complete" | "provisional" | "empty" | "failed" | "skipped_cached"
+    status: str  # "complete" | "complete_with_known_gaps" | "provisional" | "empty" | "failed" | "skipped_cached"
     rows: int
     error: Optional[str] = None
 
@@ -351,6 +352,7 @@ def sibling_still_valid(
     provider: "MarketDataProvider",
     merged_df: pd.DataFrame,
     timeframe_minutes: int,
+    exceptions: Optional[List[MarketException]] = None,
 ) -> Tuple[bool, str]:
     """Would `entry`'s claimed state still be granted to the rows now in
     the shared artifact? Re-runs the SAME window validation a fresh fetch
@@ -369,6 +371,7 @@ def sibling_still_valid(
     report = validate_market_bars(
         rows.reset_index(drop=True), "sibling", start, end,
         timeframe_minutes=timeframe_minutes, bar_density=provider.capabilities().bar_density, as_of=as_of,
+        exceptions=exceptions,
     )
     if entry.status == "empty":
         if report.expected_trading_sessions == 0 and rows.empty:
@@ -381,6 +384,10 @@ def sibling_still_valid(
         return False, "claimed rows absent from rebuilt shared artifact"
     if report.is_hard_failure:
         return False, f"sibling re-validation failed: {'; '.join(report.issues)}"
+    if entry.status == "complete" and report.known_gap_minutes:
+        # Claimed fully complete, but now relies on registered gaps: the
+        # claim itself is no longer true -- refetch rather than re-bless.
+        return False, "claimed complete but rows now only pass via registered provider gaps"
     return True, ""
 
 
@@ -392,6 +399,7 @@ def reverify_and_refresh_siblings(
     checksum: str,
     merged_df: pd.DataFrame,
     timeframe_minutes: int,
+    exceptions: Optional[List[MarketException]] = None,
 ) -> None:
     """After writing/rewriting a shared year file, re-establish trust in
     every OTHER complete/provisional/empty entry backed by it -- or
@@ -415,11 +423,11 @@ def reverify_and_refresh_siblings(
     """
     path_str = str(year_path)
     for e in manifest.entries_for(provider.name, key):
-        if e.path != path_str or e.status not in ("complete", "empty", "provisional"):
+        if e.path != path_str or e.status not in ("complete", "complete_with_known_gaps", "empty", "provisional"):
             continue
         if e.checksum == checksum:
             continue
-        ok, reason = sibling_still_valid(e, provider, merged_df, timeframe_minutes)
+        ok, reason = sibling_still_valid(e, provider, merged_df, timeframe_minutes, exceptions)
         if not ok:
             logger.warning(
                 "[%s] %s..%s claimed %s but no longer passes validation against the rebuilt shared "
@@ -438,7 +446,7 @@ def reverify_and_refresh_siblings(
             provider=provider.name, key=key, start=e.start, end=e.end,
             status=e.status, rows=e.rows, retrieved_at=e.retrieved_at,
             verified_at=utcnow_iso(), checksum=checksum, path=path_str,
-            error=e.error, request_meta=e.request_meta,
+            error=e.error, request_meta=e.request_meta, known_exception_ids=e.known_exception_ids,
         ))
 
 
@@ -450,6 +458,7 @@ def validate_window(
     timeframe_minutes: int = 1,
     bar_density: str = BAR_DENSITY_DENSE,
     as_of: Optional[dt.datetime] = None,
+    exceptions: Optional[List[MarketException]] = None,
 ) -> MarketValidationReport:
     """Validate just-fetched bars, scoped to the exact requested window.
     Macro-release-window coverage is intentionally NOT checked here --
@@ -465,6 +474,7 @@ def validate_window(
     df = pd.DataFrame(bars, columns=BAR_COLUMNS)
     return validate_market_bars(
         df, symbol, start, end, timeframe_minutes=timeframe_minutes, bar_density=bar_density, as_of=as_of,
+        exceptions=exceptions,
     )
 
 
@@ -541,6 +551,9 @@ def fetch_market_symbol(
 
     key = provider.cache_key(symbol, timeframe)
     request_meta = provider.request_meta(timeframe)
+    # Registered market exceptions for exactly this dataset (provider/feed/
+    # symbol); empty when the config names no registry.
+    exceptions = load_registry_for_config(config).for_dataset(symbol, provider.name, caps.feed)
     sess = session or requests.Session()
     results: List[MonthResult] = []
     invalidated_years: set = set()
@@ -611,7 +624,7 @@ def fetch_market_symbol(
         as_of = provider.validation_as_of(now or dt.datetime.now(dt.timezone.utc))
         window_report = validate_window(
             bars, symbol, req_start, req_end,
-            timeframe_minutes=timeframe_minutes, bar_density=caps.bar_density, as_of=as_of,
+            timeframe_minutes=timeframe_minutes, bar_density=caps.bar_density, as_of=as_of, exceptions=exceptions,
         )
         persist_validation_report(config, provider, window_report, symbol, req_start, req_end, timeframe)
 
@@ -632,8 +645,19 @@ def fetch_market_symbol(
             status = "failed"
             error = redact_secrets(f"validation hard failure: {'; '.join(window_report.issues)}")
         else:
-            status = "provisional" if provisional else "complete"
+            # Operational vs scientific state: a window whose only missing
+            # minutes are REGISTERED, non-retryable provider gaps is
+            # finalized (no endless refetch of an immutable vendor hole) but
+            # labelled as such -- never as plain "complete".
+            if provisional:
+                status = "provisional"
+            elif window_report.known_gap_minutes:
+                status = "complete_with_known_gaps"
+            else:
+                status = "complete"
             error = None
+        known_ids = [i for i in window_report.applied_exception_ids
+                     if any(x.id == i and x.explains_missing_data for x in exceptions)] if window_report.known_gap_minutes else []
 
         # Durable, immediate write: merge+persist THIS chunk before moving
         # on. Raw bars are preserved even when `status` ends up "failed".
@@ -645,11 +669,11 @@ def fetch_market_symbol(
         manifest.record(ManifestEntry(
             provider=provider.name, key=key, start=start_iso, end=end_iso,
             status=status, rows=len(bars), checksum=checksum, path=str(year_path), error=error,
-            request_meta=request_meta,
+            request_meta=request_meta, known_exception_ids=known_ids,
         ))
         # Now that THIS chunk's entry reflects the rebuilt file, check
         # every OTHER entry sharing the path individually.
-        reverify_and_refresh_siblings(manifest, provider, key, year_path, checksum, merged, timeframe_minutes)
+        reverify_and_refresh_siblings(manifest, provider, key, year_path, checksum, merged, timeframe_minutes, exceptions)
 
         logger.info("[%s][%s] %s %s: %d bars", label, symbol, chunk.label, status, len(bars))
         results.append(MonthResult(symbol, req_start.year, req_start.month, status, len(bars), error=error))

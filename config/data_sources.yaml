@@ -27,6 +27,10 @@ market:
   providers:
     - "alpaca"
   timeframe: "1min"
+  # Known market-data exceptions (provider gaps, market-wide halts, ...):
+  # classified, never filled. See src/data/market_exceptions.py. Used by
+  # fetch-time and stored-data validation; part of the dataset fingerprint.
+  exception_registry: "config/market_exceptions.yaml"
   symbols:
     - "QQQ"
     - "SPY"

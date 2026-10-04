@@ -149,6 +149,134 @@ candidate and is not needed while Alpaca SIP keeps validating.
 entitlement, malformed response, validation), that provider is reported
 as failed. The run never substitutes another provider's data.
 
+## Canonical dataset version and known exceptions
+
+### Dataset descriptor
+
+The canonical market dataset is frozen and versioned by a committed
+descriptor:
+`metadata/datasets/core_market_alpaca_sip_1min_raw_qqq_spy.json`. The
+parquet data it describes stays local and gitignored.
+
+```bash
+python scripts/build_dataset_descriptor.py           # (re)write the descriptor
+python scripts/build_dataset_descriptor.py --check   # does local data still match it? (exit 1 if not)
+```
+
+It records:
+- source (Alpaca / SIP / 1min / raw) and the canonical source policy;
+- the benchmark (requested start 2016-01-01, evaluation end 2026-10-02);
+- per symbol: first and last timestamp, rows, expected and represented NYSE
+  sessions, and provisional windows;
+- per year:
+  - rows;
+  - a data **content SHA-256**;
+  - regular-session expected, observed, known-gap, excluded and unexplained
+    minutes;
+  - a validation label;
+  - repository-relative raw and normalized artifact paths with file SHA-256s;
+- the known-exception registry version and content hash;
+- the manifest's operational state (informational only).
+
+**The fingerprint** (`fingerprint`, `sha256:…`) covers exactly the
+scientific fields:
+- source and source policy;
+- benchmark;
+- registry version and content hash;
+- per symbol/year: rows, content hash, sessions, coverage minutes, and
+  provisional windows.
+
+It deliberately excludes:
+- `created_at_utc`;
+- artifact paths and machine locations;
+- file-byte hashes, because normalized files embed the wall-clock
+  `normalized_at_utc`;
+- manifest operational statuses;
+- JSON formatting.
+
+The content hash covers timestamps, OHLCV, VWAP, transactions and the
+provenance columns, in fixed dtypes, sorted by time. Re-normalizing or
+cloning the repository therefore keeps the fingerprint. Changing any bar,
+row count, provider/feed/adjustment/timeframe, policy or registry entry
+changes it. See `src/data/dataset_descriptor.py`.
+
+The latest window (2026-10-01..02) is still `provisional`, within the
+provider revision horizon. The descriptor lists it explicitly. It is
+finalized by a normal later fetch, never by editing.
+
+### Known-exception registry
+
+`config/market_exceptions.yaml` (loaded by `src/data/market_exceptions.py`)
+classifies intervals in which canonical bars are absent. Entries have:
+- a session `date`;
+- `[start, end)` bar-start intervals, given in both America/New_York local
+  time and UTC (the loader verifies they agree);
+- symbols, provider and feed scope;
+- classification, evidence status (`observed` / `reobserved` /
+  `authoritative` / `retired`), evidence, source and notes;
+- `retry_appropriate` and `invalidates_event_window`.
+
+The classifications are not interchangeable:
+
+| Classification | Meaning | Validation | Event window |
+|---|---|---|---|
+| `exchange_closed` | no session (beyond the NYSE calendar) | minutes not expected | tagged `exchange_closed_in_window` |
+| `market_wide_halt` | e.g. the March 2020 circuit-breaker halts | minutes not expected; **not** data corruption | kept, tagged `market_halt_in_window` |
+| `legitimate_no_trade_interval` | no qualifying trades for this symbol/feed | minutes not expected | tagged `no_trade_interval_in_window` |
+| `provider_gap` | trading happened, vendor archive has no bars | still missing and counted; never filled | excluded/null, tagged `provider_gap_in_window` |
+| `temporary_fetch_failure` | operational failure | still a failure; always retryable | — |
+
+The registry is seeded from the 2016–2026 backfill gap inventory:
+- 10 Alpaca SIP `provider_gap` intervals:
+  - 2016-02-02 (QQQ and SPY);
+  - 2016-02-22 (QQQ);
+  - 2018-05-02/03 (QQQ);
+  - 2019-08-12 (SPY);
+  - 2021-05-05 and 2023-06-05 (SPY; sub-threshold holes the 98% rule alone
+    would hide).
+- 4 `market_wide_halt` intervals (2020-03-09, 12, 16 and 18). These are the
+  observed no-bar intervals, consistent with the reported Level-1 halts.
+  Their status stays `observed` until an authoritative halt record is
+  attached.
+
+Any change bumps `registry_version`, which changes the dataset fingerprint.
+
+**Operational vs. scientific state.** A chunk whose only missing minutes are
+covered by registered, non-retryable `provider_gap` entries is finalized as
+`complete_with_known_gaps` (manifest `known_exception_ids` lists them):
+- **operationally resolved:** it is skipped on reruns, counts toward the
+  watermark, and `update_data.py` stops refetching the immutable vendor hole;
+- **scientifically incomplete:** validation still counts those minutes as
+  `known_gap_minutes`, never reports the window as clean, and never fills
+  it.
+
+Any *unexplained* missing minute still fails the chunk. A gap with
+`retry_appropriate: true`, or any temporary fetch failure, stays `failed`
+and is retried. If a registered no-bar interval turns out to contain bars,
+validation reports the entry as stale. Chunks that failed before the
+registry existed (2016-02, 2018-05, 2019-08 and 2020-03) move to
+`complete_with_known_gaps` (or `complete`, for the halt months) on the next
+normal update. That one re-fetch is also the confirming re-observation.
+
+**Event-window query.** Downstream code asks:
+```python
+from src.data.market_exceptions import load_registry_for_config
+report = load_registry_for_config(config).query_window("QQQ", start, end)   # tz-aware, [start, end)
+report.has_provider_gap, report.has_market_halt, report.invalidates_event_window, report.tags, report.hits
+```
+
+Intended event-window policy, for the macro market-response layer (not yet
+wired in):
+- **A provider gap intersects a required window:** that feature/window is
+  excluded or null, tagged with the data-quality reason, and never
+  interpolated.
+- **A market halt intersects the window:** the event is kept. Returns
+  spanning a halt are real, but the row is tagged `market_halt_in_window`,
+  because a nominal 5m/15m horizon then covers more clock time than traded
+  time.
+- **A missing optional extended-hours minute:** the existing density and
+  window-sufficiency rules apply; nothing is fabricated.
+
 ## Setup
 
 ```bash

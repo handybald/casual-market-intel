@@ -30,6 +30,7 @@ import pandas as pd
 from src.data.redaction import install_log_redaction
 from src.data.config import load_config
 from src.data.manifest import Manifest
+from src.data.market_exceptions import load_registry_for_config
 from src.data.fetch.market_provider import market_provider_class, market_provider_names, parse_timeframe
 from src.data.normalize.io import read_events
 from src.data.validation.macro import compare_macro_sources, summarize
@@ -166,13 +167,17 @@ def validate_market(config, macro_events, report_dir: Path) -> bool:
     manifest = Manifest(config.manifest_path)
     any_hard_failure = False
     report_dir.mkdir(parents=True, exist_ok=True)
+    registry = load_registry_for_config(config)
+    if registry.entries:
+        print(f"Known market exception registry v{registry.registry_version}: {len(registry.entries)} entries "
+              f"({registry.source_path}) -- registered exceptions are classified, never filled.")
     for provider in providers:
-        if _validate_provider_market(provider, manifest, release_timestamps, report_dir):
+        if _validate_provider_market(provider, manifest, release_timestamps, report_dir, registry):
             any_hard_failure = True
     return any_hard_failure or bool(unknown_dirs)
 
 
-def _validate_provider_market(provider, manifest, release_timestamps, report_dir: Path) -> bool:
+def _validate_provider_market(provider, manifest, release_timestamps, report_dir: Path, registry) -> bool:
     caps = provider.capabilities()
     tag = f"[{provider.dataset_label}]"
     any_hard_failure = False
@@ -220,6 +225,7 @@ def _validate_provider_market(provider, manifest, release_timestamps, report_dir
                             timeframe_minutes=timeframe_minutes,
                             macro_release_timestamps_utc=release_timestamps,
                             bar_density=caps.bar_density,
+                            exceptions=registry.for_dataset(symbol, provider.name, caps.feed),
                         )
                         for start, end in intervals
                     ]
@@ -229,7 +235,8 @@ def _validate_provider_market(provider, manifest, release_timestamps, report_dir
                         any_hard_failure = True
 
                     for (start, end), report in zip(intervals, reports):
-                        status = "CLEAN" if report.is_clean else ("HARD FAILURE" if report.is_hard_failure else "ISSUES")
+                        status = ("CLEAN" if report.is_clean else "HARD FAILURE" if report.is_hard_failure
+                                  else "KNOWN PROVIDER GAPS" if report.known_gap_minutes else "ISSUES")
                         print(
                             f"{tag}[{symbol}][{timeframe}][{adj_label}][{year}] "
                             f"requested={start.isoformat()}..{end.isoformat()} {status} rows={report.total_rows} "
@@ -238,6 +245,13 @@ def _validate_provider_market(provider, manifest, release_timestamps, report_dir
                             f"regular_hours_coverage={report.regular_hours_coverage_ratio:.1%} "
                             f"macro_windows_missing={len(report.macro_windows_missing_coverage)}"
                         )
+                        if report.known_gap_minutes or report.excluded_regular_minutes:
+                            # Classified separately: a registered provider gap is a known, still-missing
+                            # scientific gap; a market-wide halt is not data corruption at all.
+                            print(f"    known provider-gap minutes={report.known_gap_minutes} "
+                                  f"(sessions {report.known_gap_sessions}); excluded no-trade minutes="
+                                  f"{report.excluded_minutes_by_class}; unexplained missing minutes="
+                                  f"{report.unexplained_missing_minutes}")
                         for issue in report.issues:
                             print(f"    - {issue}")
 

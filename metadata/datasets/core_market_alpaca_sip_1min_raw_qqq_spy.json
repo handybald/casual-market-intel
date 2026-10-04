@@ -1,0 +1,713 @@
+{
+  "benchmark": {
+    "evaluation_end": "2026-10-02",
+    "requested_start": "2016-01-01"
+  },
+  "created_at_utc": "2026-10-04T00:08:20+00:00",
+  "dataset_name": "core_market_alpaca_sip_1min_raw_qqq_spy",
+  "descriptor_schema_version": 1,
+  "fingerprint": "sha256:b4c6573e873774053183ecbe9a8a981431926795b8bcaaa9b6c440e7b654b1d7",
+  "known_exception_registry": {
+    "content_sha256": "12ec83cfca55cf5ea9558d3db2fb903edb2e837e5c6a05207f508c415458df01",
+    "entries": 14,
+    "path": "config/market_exceptions.yaml",
+    "registry_version": 1
+  },
+  "source": {
+    "adjustment": "raw",
+    "bar_timestamp": "interval_start",
+    "feed": "sip",
+    "feed_scope": "consolidated",
+    "provider": "alpaca",
+    "timeframe": "1min"
+  },
+  "source_policy": {
+    "ohlc": {
+      "canonical": "alpaca/sip",
+      "note": "raw (unadjusted) consolidated-tape 1-minute bars"
+    },
+    "reference_providers": {
+      "alpaca/iex": "sparse single-venue sanity check only",
+      "massive": "validation/reference only"
+    },
+    "volume": {
+      "canonical": "alpaca/sip",
+      "note": "provider volume definitions differ (auction/block prints); never mix another provider's volume into features"
+    },
+    "vwap": {
+      "canonical": "alpaca/sip",
+      "note": "Massive's provider-reported vw is a different, provider-native quantity; never interchanged"
+    }
+  },
+  "symbols": {
+    "QQQ": {
+      "expected_sessions": 2703,
+      "first_timestamp_utc": "2016-01-04T09:00:00+00:00",
+      "last_timestamp_utc": "2026-10-02T23:59:00+00:00",
+      "manifest_operational_state": {
+        "complete_with_known_gaps_windows": [],
+        "failed_windows": [
+          "2016-02-01..2016-02-29",
+          "2018-05-01..2018-05-31",
+          "2020-03-01..2020-03-31"
+        ],
+        "note": "operational acquisition state; not part of the fingerprint",
+        "status_counts": {
+          "complete": 131,
+          "empty": 1,
+          "failed": 3,
+          "provisional": 1
+        }
+      },
+      "provisional_windows": [
+        "2026-10-01..2026-10-02"
+      ],
+      "represented_sessions": 2703,
+      "total_rows": 2081801,
+      "years": {
+        "2016": {
+          "applied_exception_ids": [
+            "alpaca-sip-QQQ-2016-02-02-gap1",
+            "alpaca-sip-QQQ-2016-02-22-gap1",
+            "alpaca-sip-QQQ-2016-02-22-gap2"
+          ],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "75ebe80f5f07e1ab7d19cd1b32bd91405762aed499f5cdc9d0fbf0d85ed2764e",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2016.parquet"
+            },
+            "raw": {
+              "file_sha256": "44dac7aa5f09cc0d546d736efc76fda8b0079d4f58a4386f6daa3b504e52d637",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2016.parquet"
+            }
+          },
+          "content_sha256": "5f1255f26c379d8300edd6ea831e8a117c823f0a4779ca28e3cd84efc1cdaec2",
+          "excluded_minutes": {},
+          "expected_sessions": 252,
+          "known_gap_minutes": 59,
+          "known_gap_sessions": [
+            "2016-02-02",
+            "2016-02-22"
+          ],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 0.999399,
+          "regular_expected_minutes": 98100,
+          "regular_observed_minutes": 98041,
+          "represented_sessions": 252,
+          "rows": 140306,
+          "unexplained_missing_minutes": 0,
+          "validation": "known_provider_gaps"
+        },
+        "2017": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "d99039e784ea5b226f303132a2f5d815c0cc983ca245862d61d47b0f533731c0",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2017.parquet"
+            },
+            "raw": {
+              "file_sha256": "cff08e869520c25a1ec83a299d206034fb24774d998b43a45636b5e819fed1ae",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2017.parquet"
+            }
+          },
+          "content_sha256": "fb91892d69a5f84133965b2e0af33c2a5f513f106d52f61203fc8738de7a7674",
+          "excluded_minutes": {},
+          "expected_sessions": 251,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97530,
+          "regular_observed_minutes": 97530,
+          "represented_sessions": 251,
+          "rows": 140940,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2018": {
+          "applied_exception_ids": [
+            "alpaca-sip-QQQ-2018-05-02-gap1",
+            "alpaca-sip-QQQ-2018-05-03-gap1"
+          ],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "b18ebf081e789baa411037bbd27100bef37f229a99bf18642a9623b19604479d",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2018.parquet"
+            },
+            "raw": {
+              "file_sha256": "a351a7697aca8f3431e4a312d8b6be8991dc9edb41f418783ccf1ca6139b3203",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2018.parquet"
+            }
+          },
+          "content_sha256": "5eac05e484882ad06ed4babcd3858abd7561b4b12c6b6e7de2bacbd01929da8e",
+          "excluded_minutes": {},
+          "expected_sessions": 251,
+          "known_gap_minutes": 778,
+          "known_gap_sessions": [
+            "2018-05-02",
+            "2018-05-03"
+          ],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 0.992008,
+          "regular_expected_minutes": 97350,
+          "regular_observed_minutes": 96572,
+          "represented_sessions": 251,
+          "rows": 176662,
+          "unexplained_missing_minutes": 0,
+          "validation": "known_provider_gaps"
+        },
+        "2019": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "744494c259ab1c78f1c714d8f517058398b4ed11e33dc1110862a8356f86216b",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2019.parquet"
+            },
+            "raw": {
+              "file_sha256": "d47dd7345bb36f9dbe3c0ca5985f963a13c38b2f5bd90fd18ce42c54d2556c75",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2019.parquet"
+            }
+          },
+          "content_sha256": "79ddac0b04cb80e16d4fd36ac62ed8547e63a1a12528f07d7d6cb7f9d9ac27fe",
+          "excluded_minutes": {},
+          "expected_sessions": 252,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97740,
+          "regular_observed_minutes": 97740,
+          "represented_sessions": 252,
+          "rows": 181360,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2020": {
+          "applied_exception_ids": [
+            "halt-2020-03-09-QQQ-SPY",
+            "halt-2020-03-12-QQQ-SPY",
+            "halt-2020-03-16-QQQ-SPY",
+            "halt-2020-03-18-QQQ-SPY"
+          ],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "ffa283c9c81be4f44b9ff493a1cf2cfdb0353e004a2023e01bb7d4475d295f0c",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2020.parquet"
+            },
+            "raw": {
+              "file_sha256": "8ffd75879f4ced6e726af5d7b200d49496d0802b25e3853e6f549a754360fa59",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2020.parquet"
+            }
+          },
+          "content_sha256": "b3dd8ae68358ba04926a0522a15f48a89f58e30db3f9e2987bfaa9ceb20b2ece",
+          "excluded_minutes": {
+            "market_wide_halt": 56
+          },
+          "expected_sessions": 253,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 98254,
+          "regular_observed_minutes": 98254,
+          "represented_sessions": 253,
+          "rows": 206818,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2021": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "79c0ddb133f9c17165db5c2ca3993275f7d52a5e8c07d917dec7f2f2025a1b81",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2021.parquet"
+            },
+            "raw": {
+              "file_sha256": "965950ad7a3fbaba47a1cdf794534c6ec9b225a43307019330f6c541cb70da31",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2021.parquet"
+            }
+          },
+          "content_sha256": "959c2e77596af9dd3347cab527792960b1e7fb238eb63569778e005978d2734b",
+          "excluded_minutes": {},
+          "expected_sessions": 252,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 98100,
+          "regular_observed_minutes": 98100,
+          "represented_sessions": 252,
+          "rows": 203477,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2022": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "496af0db76952b5c22d565c8aaf592d286241679ca8d8229e6eaa140131f07e2",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2022.parquet"
+            },
+            "raw": {
+              "file_sha256": "cd1b64deba853a342dabddb596ad493e13c323308d0bbcdef423f80346d9e6c7",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2022.parquet"
+            }
+          },
+          "content_sha256": "cf4ad90a87f3c6b4fc678d3cd0935938f322bf9c645bf94c93f2cad2689bebda",
+          "excluded_minutes": {},
+          "expected_sessions": 251,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97710,
+          "regular_observed_minutes": 97710,
+          "represented_sessions": 251,
+          "rows": 215635,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2023": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "e6bfea35e04669fa11c54a0b67bd48248aac11d29541d0fd120fddd0ba5d525a",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2023.parquet"
+            },
+            "raw": {
+              "file_sha256": "0c2f0a6ff9bfb9902ab2a0884fc75ca64780cc087042f58e428717dce99ce08c",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2023.parquet"
+            }
+          },
+          "content_sha256": "526ec4dccd36ed316ac3960a727204e5a5bded707e8f63f9b5fc1dab22075570",
+          "excluded_minutes": {},
+          "expected_sessions": 250,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97140,
+          "regular_observed_minutes": 97140,
+          "represented_sessions": 250,
+          "rows": 208178,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2024": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "fb98c4923789966d8e2c5bed43b89248fa85b3cddeb2b62947ba8b8ebc94e8db",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2024.parquet"
+            },
+            "raw": {
+              "file_sha256": "8cea7f97ecdfa6e24ec32ab6ac47bfa3e1549214896feac1beac31f13f981430",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2024.parquet"
+            }
+          },
+          "content_sha256": "709fb9b913a5334809128f4cc211c20359c8c80b54d20f6f45006e4023ac5cbd",
+          "excluded_minutes": {},
+          "expected_sessions": 252,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97740,
+          "regular_observed_minutes": 97740,
+          "represented_sessions": 252,
+          "rows": 210608,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2025": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "0a4f80059bd28654bc0dd9511f537e1a576289de8abbff2c1b58e054ff468aa0",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2025.parquet"
+            },
+            "raw": {
+              "file_sha256": "03c2cd77c39b038ffcc3c5254db1406bfab669cd411a002bb7eba78329503077",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2025.parquet"
+            }
+          },
+          "content_sha256": "c3a111e904ae8e74bfa0b3571d160a5b74f028c011cfddb00afbc57276670deb",
+          "excluded_minutes": {},
+          "expected_sessions": 250,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 96960,
+          "regular_observed_minutes": 96960,
+          "represented_sessions": 250,
+          "rows": 221418,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2026": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "41511a055c42492fe28b6330f730e47edf795abd483633ffdc8e43facb92138e",
+              "path": "data/interim/alpaca/sip/QQQ/1min/raw/2026.parquet"
+            },
+            "raw": {
+              "file_sha256": "2f1de5706d51c0c88d148b9aebc06a731d5dbe5ef8863d27e2f1f596f01861fb",
+              "path": "data/raw/alpaca/sip/QQQ/1min/raw/2026.parquet"
+            }
+          },
+          "content_sha256": "201d73d550554b504a65fda9adeae5fb68773045cb1fb92469bfcc14645dc932",
+          "excluded_minutes": {},
+          "expected_sessions": 189,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 73710,
+          "regular_observed_minutes": 73710,
+          "represented_sessions": 189,
+          "rows": 176399,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        }
+      }
+    },
+    "SPY": {
+      "expected_sessions": 2703,
+      "first_timestamp_utc": "2016-01-04T09:00:00+00:00",
+      "last_timestamp_utc": "2026-10-02T23:59:00+00:00",
+      "manifest_operational_state": {
+        "complete_with_known_gaps_windows": [],
+        "failed_windows": [
+          "2016-02-01..2016-02-29",
+          "2019-08-01..2019-08-31",
+          "2020-03-01..2020-03-31"
+        ],
+        "note": "operational acquisition state; not part of the fingerprint",
+        "status_counts": {
+          "complete": 126,
+          "failed": 3,
+          "provisional": 1
+        }
+      },
+      "provisional_windows": [
+        "2026-10-01..2026-10-02"
+      ],
+      "represented_sessions": 2703,
+      "total_rows": 2157447,
+      "years": {
+        "2016": {
+          "applied_exception_ids": [
+            "alpaca-sip-SPY-2016-02-02-gap1"
+          ],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "4b8dfe470f17c904f22e28758034fd5d3c9f4209356f3175c1b6f98dcd7ae194",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2016.parquet"
+            },
+            "raw": {
+              "file_sha256": "767a2bd457745596bddb1f8d1b005934e985c817824ebd0a732fd3fe9de03dc9",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2016.parquet"
+            }
+          },
+          "content_sha256": "659bc4fef729981ea8620b730523a17dab8778ee321e907cf8d7abe7e1c6235e",
+          "excluded_minutes": {},
+          "expected_sessions": 252,
+          "known_gap_minutes": 9,
+          "known_gap_sessions": [
+            "2016-02-02"
+          ],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 0.999908,
+          "regular_expected_minutes": 98100,
+          "regular_observed_minutes": 98091,
+          "represented_sessions": 252,
+          "rows": 190358,
+          "unexplained_missing_minutes": 0,
+          "validation": "known_provider_gaps"
+        },
+        "2017": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "d5f54a9d8ff6b799181e1d495d42ec5d6a7b65664ae8f9774be473e0b012aa39",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2017.parquet"
+            },
+            "raw": {
+              "file_sha256": "1ab0475bb2fd1b803f49606a55670aeb409ef100ae0e6d32f641e1670223b764",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2017.parquet"
+            }
+          },
+          "content_sha256": "e15ee79dde88955c410150a0986cd1c174a6c256560f413e54c88651e4ee8b8a",
+          "excluded_minutes": {},
+          "expected_sessions": 251,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97530,
+          "regular_observed_minutes": 97530,
+          "represented_sessions": 251,
+          "rows": 171824,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2018": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "7bbcb03a6ad692a8447b3a8f37bc1b7da8b61b08c0b49c063482a2f69d02c973",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2018.parquet"
+            },
+            "raw": {
+              "file_sha256": "3f2fb40bfb8bb7658c022df6a04298025475f1e23a88570145a19d4d471c5972",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2018.parquet"
+            }
+          },
+          "content_sha256": "cddb97dd368ee73d8dc0db19f3cd1f043b4b595ea6ccbacb66808a41e49b1248",
+          "excluded_minutes": {},
+          "expected_sessions": 251,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97350,
+          "regular_observed_minutes": 97350,
+          "represented_sessions": 251,
+          "rows": 192848,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2019": {
+          "applied_exception_ids": [
+            "alpaca-sip-SPY-2019-08-12-gap1",
+            "alpaca-sip-SPY-2019-08-12-gap2"
+          ],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "639cd52288ee62429b9259870a183d8c3f65ebb3c32ca2479ea9429685b60a98",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2019.parquet"
+            },
+            "raw": {
+              "file_sha256": "86ffba686873fc72822710f0f1e8190a00a2d9d33fd96ee8ea1482b113d5e011",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2019.parquet"
+            }
+          },
+          "content_sha256": "f0fc74f9a957dc990b1c2fbbc55c8e762f1ee2540bdec3c9a1cdc72182657b47",
+          "excluded_minutes": {},
+          "expected_sessions": 252,
+          "known_gap_minutes": 30,
+          "known_gap_sessions": [
+            "2019-08-12"
+          ],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 0.999693,
+          "regular_expected_minutes": 97740,
+          "regular_observed_minutes": 97710,
+          "represented_sessions": 252,
+          "rows": 190712,
+          "unexplained_missing_minutes": 0,
+          "validation": "known_provider_gaps"
+        },
+        "2020": {
+          "applied_exception_ids": [
+            "halt-2020-03-09-QQQ-SPY",
+            "halt-2020-03-12-QQQ-SPY",
+            "halt-2020-03-16-QQQ-SPY",
+            "halt-2020-03-18-QQQ-SPY"
+          ],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "9f84591520a088ad688005f40a3f6f027d6f5dd863fa2fa9e20e50fa2a7ebc57",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2020.parquet"
+            },
+            "raw": {
+              "file_sha256": "835c4a2ac1b27aea8ecc131254ee7fdae80fa90a6a8db6846e676f4c9290e33a",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2020.parquet"
+            }
+          },
+          "content_sha256": "7247dc0041b5ec4e2976ca770e2ed8b76bc6b5745df328fd1dffdf7d04a2f0e3",
+          "excluded_minutes": {
+            "market_wide_halt": 56
+          },
+          "expected_sessions": 253,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 98254,
+          "regular_observed_minutes": 98254,
+          "represented_sessions": 253,
+          "rows": 214280,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2021": {
+          "applied_exception_ids": [
+            "alpaca-sip-SPY-2021-05-05-gap1"
+          ],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "af767cc5674e9cbca5aed8d7a53240c0381a2bc518bd6def490dd50fda26aad7",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2021.parquet"
+            },
+            "raw": {
+              "file_sha256": "80a89cff61b1b8c4554b238ca4156709ecfeac7d7573d6ab66af0828dd807f8e",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2021.parquet"
+            }
+          },
+          "content_sha256": "f1067fdbb9fa6196d4ce88b4457aa9715169c45fec2134cd9847b5428c99d489",
+          "excluded_minutes": {},
+          "expected_sessions": 252,
+          "known_gap_minutes": 5,
+          "known_gap_sessions": [
+            "2021-05-05"
+          ],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 0.999949,
+          "regular_expected_minutes": 98100,
+          "regular_observed_minutes": 98095,
+          "represented_sessions": 252,
+          "rows": 201757,
+          "unexplained_missing_minutes": 0,
+          "validation": "known_provider_gaps"
+        },
+        "2022": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "ff28e3137a083d9710a1ebea5144e22404be53593913c07eb8fbe469b1dcd690",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2022.parquet"
+            },
+            "raw": {
+              "file_sha256": "d1e091bbdc52aa964acaf8dc304f23838245717d3fd300bbec59c1d6543d6425",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2022.parquet"
+            }
+          },
+          "content_sha256": "0171a6865886f94902cfd2748e94e5644f3a04954d16fa31e21d047e237bacbc",
+          "excluded_minutes": {},
+          "expected_sessions": 251,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97710,
+          "regular_observed_minutes": 97710,
+          "represented_sessions": 251,
+          "rows": 212907,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2023": {
+          "applied_exception_ids": [
+            "alpaca-sip-SPY-2023-06-05-gap1"
+          ],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "e236a5a8ffcb30d3a787ff1ea4728f7198469e68e457d20e64e05ae240116a6e",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2023.parquet"
+            },
+            "raw": {
+              "file_sha256": "087f14147f6068bc582ad6b0580c5772e011ae61c3dadbade224f69fe82bc2fe",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2023.parquet"
+            }
+          },
+          "content_sha256": "43e8f5322f78e99065c2f7ab61d8603061cf1855de38336700af8d17572344fd",
+          "excluded_minutes": {},
+          "expected_sessions": 250,
+          "known_gap_minutes": 4,
+          "known_gap_sessions": [
+            "2023-06-05"
+          ],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 0.999959,
+          "regular_expected_minutes": 97140,
+          "regular_observed_minutes": 97136,
+          "represented_sessions": 250,
+          "rows": 202657,
+          "unexplained_missing_minutes": 0,
+          "validation": "known_provider_gaps"
+        },
+        "2024": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "d497b91233345b438f1c3c22a0f43e92c6d1c2bf630c34302cc7e61bcf2ec509",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2024.parquet"
+            },
+            "raw": {
+              "file_sha256": "47b3f4469bf3802f63b27bcfc3da03044a6183e0719684b97682ede8626103e4",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2024.parquet"
+            }
+          },
+          "content_sha256": "dce12d681bb0d60bbb6538a193c19eb1b880cdee0446fe87d39322d7878b24d8",
+          "excluded_minutes": {},
+          "expected_sessions": 252,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 97740,
+          "regular_observed_minutes": 97740,
+          "represented_sessions": 252,
+          "rows": 197013,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2025": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "8dfe74117c1f75263832a63cac5dd87547da8210576996ffc2316ba93c71a430",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2025.parquet"
+            },
+            "raw": {
+              "file_sha256": "cad3a6c51197be15e9f414618148e7c4da98c9e3ecb0969d42769940efc13b4b",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2025.parquet"
+            }
+          },
+          "content_sha256": "77b528c372d1a9c3b81ed0a50c3c78227d0bb222864f3fcc924d47386b8132ad",
+          "excluded_minutes": {},
+          "expected_sessions": 250,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 96960,
+          "regular_observed_minutes": 96960,
+          "represented_sessions": 250,
+          "rows": 211613,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        },
+        "2026": {
+          "applied_exception_ids": [],
+          "artifacts": {
+            "normalized": {
+              "file_sha256": "704f0b839b39e1418abe641df9ad4aeb8214eebcd0e00c0b622e2156e6bbdb46",
+              "path": "data/interim/alpaca/sip/SPY/1min/raw/2026.parquet"
+            },
+            "raw": {
+              "file_sha256": "467525d174cf57eb6e2f7aeaedcca9d0a9c9bfef99e1c6e484a6e05d33a3efdd",
+              "path": "data/raw/alpaca/sip/SPY/1min/raw/2026.parquet"
+            }
+          },
+          "content_sha256": "fa1439de8999ff8b96aa2da7179d7a040f6795901a79c48b918cfa8b1d02527d",
+          "excluded_minutes": {},
+          "expected_sessions": 189,
+          "known_gap_minutes": 0,
+          "known_gap_sessions": [],
+          "raw_content_matches_normalized": true,
+          "regular_coverage": 1.0,
+          "regular_expected_minutes": 73710,
+          "regular_observed_minutes": 73710,
+          "represented_sessions": 189,
+          "rows": 171478,
+          "unexplained_missing_minutes": 0,
+          "validation": "clean"
+        }
+      }
+    }
+  }
+}

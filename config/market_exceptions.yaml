@@ -1,0 +1,317 @@
+# Known market-data exception registry -- see src/data/market_exceptions.py.
+#
+# Intervals are [start, end) over 1-minute BAR START times; *_local are
+# America/New_York wall-clock times and MUST equal *_utc (the loader checks).
+# Seeded from the 2016-01-04 .. 2026-10-02 Alpaca SIP QQQ/SPY backfill gap
+# inventory (2026-10-04). Nothing listed here is filled or patched: a
+# provider_gap stays missing; this file only classifies it.
+#
+# status: observed | reobserved | authoritative | retired  (evidence level;
+# never upgraded without new evidence). Bump registry_version on any change
+# -- it is part of the dataset fingerprint.
+
+schema_version: 1
+registry_version: 1
+entries:
+- id: alpaca-sip-QQQ-2016-02-02-gap1
+  classification: provider_gap
+  status: observed
+  symbols:
+  - QQQ
+  provider: alpaca
+  feed: sip
+  date: '2016-02-02'
+  timezone: America/New_York
+  start_local: '11:18'
+  end_local: '11:27'
+  start_utc: '2016-02-02T16:18:00Z'
+  end_utc: '2016-02-02T16:27:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No QQQ bars from 11:18 to 11:26 ET (inclusive bar starts; 9 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. SPY has an overlapping gap the same session ([[''11:19'', ''11:27'']] ET): provider-wide, cause unverified.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_QQQ_1min_raw_2016.json)
+  notes: ''
+- id: alpaca-sip-SPY-2016-02-02-gap1
+  classification: provider_gap
+  status: observed
+  symbols:
+  - SPY
+  provider: alpaca
+  feed: sip
+  date: '2016-02-02'
+  timezone: America/New_York
+  start_local: '11:19'
+  end_local: '11:28'
+  start_utc: '2016-02-02T16:19:00Z'
+  end_utc: '2016-02-02T16:28:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No SPY bars from 11:19 to 11:27 ET (inclusive bar starts; 9 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. QQQ has an overlapping gap the same session ([[''11:18'', ''11:26'']] ET): provider-wide, cause unverified.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_SPY_1min_raw_2016.json)
+  notes: ''
+- id: alpaca-sip-QQQ-2016-02-22-gap1
+  classification: provider_gap
+  status: observed
+  symbols:
+  - QQQ
+  provider: alpaca
+  feed: sip
+  date: '2016-02-22'
+  timezone: America/New_York
+  start_local: '10:26'
+  end_local: '11:12'
+  start_utc: '2016-02-22T15:26:00Z'
+  end_utc: '2016-02-22T16:12:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No QQQ bars from 10:26 to 11:11 ET (inclusive bar starts; 50 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. SPY is complete that session: symbol-specific.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_QQQ_1min_raw_2016.json)
+  notes: ''
+- id: alpaca-sip-QQQ-2016-02-22-gap2
+  classification: provider_gap
+  status: observed
+  symbols:
+  - QQQ
+  provider: alpaca
+  feed: sip
+  date: '2016-02-22'
+  timezone: America/New_York
+  start_local: '11:14'
+  end_local: '11:18'
+  start_utc: '2016-02-22T16:14:00Z'
+  end_utc: '2016-02-22T16:18:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No QQQ bars from 11:14 to 11:17 ET (inclusive bar starts; 50 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. SPY is complete that session: symbol-specific.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_QQQ_1min_raw_2016.json)
+  notes: ''
+- id: alpaca-sip-QQQ-2018-05-02-gap1
+  classification: provider_gap
+  status: observed
+  symbols:
+  - QQQ
+  provider: alpaca
+  feed: sip
+  date: '2018-05-02'
+  timezone: America/New_York
+  start_local: 09:31
+  end_local: '16:00'
+  start_utc: '2018-05-02T13:31:00Z'
+  end_utc: '2018-05-02T20:00:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No QQQ bars from 09:31 to 15:59 ET (inclusive bar starts; 389 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. Only the 09:30 opening print (1 trade) plus a closing/after-hours remainder exist; continuous trading
+    is absent while 2018-05-01 and 2018-05-04 are complete (33-38M regular-session shares). SPY is complete that
+    session: symbol-specific.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_QQQ_1min_raw_2018.json)
+  notes: 'Session of an FOMC rate decision (14:00 ET): the QQQ response window is unavailable; SPY is intact.'
+- id: alpaca-sip-QQQ-2018-05-03-gap1
+  classification: provider_gap
+  status: observed
+  symbols:
+  - QQQ
+  provider: alpaca
+  feed: sip
+  date: '2018-05-03'
+  timezone: America/New_York
+  start_local: 09:31
+  end_local: '16:00'
+  start_utc: '2018-05-03T13:31:00Z'
+  end_utc: '2018-05-03T20:00:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No QQQ bars from 09:31 to 15:59 ET (inclusive bar starts; 389 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. Only the 09:30 opening print (1 trade) plus a closing/after-hours remainder exist; continuous trading
+    is absent while 2018-05-01 and 2018-05-04 are complete (33-38M regular-session shares). SPY is complete that
+    session: symbol-specific.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_QQQ_1min_raw_2018.json)
+  notes: ''
+- id: alpaca-sip-SPY-2019-08-12-gap1
+  classification: provider_gap
+  status: observed
+  symbols:
+  - SPY
+  provider: alpaca
+  feed: sip
+  date: '2019-08-12'
+  timezone: America/New_York
+  start_local: '15:29'
+  end_local: '15:31'
+  start_utc: '2019-08-12T19:29:00Z'
+  end_utc: '2019-08-12T19:31:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No SPY bars from 15:29 to 15:30 ET (inclusive bar starts; 30 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. QQQ is complete that session: symbol-specific.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_SPY_1min_raw_2019.json)
+  notes: ''
+- id: alpaca-sip-SPY-2019-08-12-gap2
+  classification: provider_gap
+  status: observed
+  symbols:
+  - SPY
+  provider: alpaca
+  feed: sip
+  date: '2019-08-12'
+  timezone: America/New_York
+  start_local: '15:32'
+  end_local: '16:00'
+  start_utc: '2019-08-12T19:32:00Z'
+  end_utc: '2019-08-12T20:00:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No SPY bars from 15:32 to 15:59 ET (inclusive bar starts; 30 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. QQQ is complete that session: symbol-specific.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_SPY_1min_raw_2019.json)
+  notes: ''
+- id: alpaca-sip-SPY-2021-05-05-gap1
+  classification: provider_gap
+  status: observed
+  symbols:
+  - SPY
+  provider: alpaca
+  feed: sip
+  date: '2021-05-05'
+  timezone: America/New_York
+  start_local: '11:27'
+  end_local: '11:32'
+  start_utc: '2021-05-05T15:27:00Z'
+  end_utc: '2021-05-05T15:32:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No SPY bars from 11:27 to 11:31 ET (inclusive bar starts; 5 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. QQQ is complete that session: symbol-specific.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_SPY_1min_raw_2021.json)
+  notes: 'Sub-threshold: the session stays above the 98% completeness threshold, so its month finalized as ''complete''
+    before this registry existed; the gap is recorded here so it stays scientifically visible.'
+- id: alpaca-sip-SPY-2023-06-05-gap1
+  classification: provider_gap
+  status: observed
+  symbols:
+  - SPY
+  provider: alpaca
+  feed: sip
+  date: '2023-06-05'
+  timezone: America/New_York
+  start_local: 09:52
+  end_local: 09:56
+  start_utc: '2023-06-05T13:52:00Z'
+  end_utc: '2023-06-05T13:56:00Z'
+  retry_appropriate: false
+  invalidates_event_window: true
+  evidence: 'No SPY bars from 09:52 to 09:55 ET (inclusive bar starts; 4 of 390 regular minutes missing that session)
+    while the surrounding minutes trade normally; observed once in this acquisition, identical re-fetch not yet
+    performed. QQQ is complete that session: symbol-specific.'
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_SPY_1min_raw_2023.json)
+  notes: 'Sub-threshold: the session stays above the 98% completeness threshold, so its month finalized as ''complete''
+    before this registry existed; the gap is recorded here so it stays scientifically visible.'
+- id: halt-2020-03-09-QQQ-SPY
+  classification: market_wide_halt
+  status: observed
+  symbols:
+  - QQQ
+  - SPY
+  provider: '*'
+  feed: '*'
+  date: '2020-03-09'
+  timezone: America/New_York
+  start_local: 09:35
+  end_local: 09:49
+  start_utc: '2020-03-09T13:35:00Z'
+  end_utc: '2020-03-09T13:49:00Z'
+  retry_appropriate: false
+  invalidates_event_window: false
+  evidence: Identical no-bar interval 09:35-09:48 ET (inclusive bar starts, 14 minutes) in BOTH QQQ and SPY Alpaca
+    SIP data, with normal trading before and after. Its timing matches the publicly reported Level-1 (7%) market-wide
+    circuit-breaker halt of this date (15-minute halt). The interval is the OBSERVED no-bar interval, not taken
+    from an authoritative halt record.
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_{QQQ,SPY}_1min_raw_2020.json)
+  notes: 'Scoped to the observed symbols: after a market-wide halt each security reopens via its own auction, so
+    the no-bar interval is not assumed for other symbols. Upgrade status to ''authoritative'' only with an exchange
+    halt notice attached as source.'
+- id: halt-2020-03-12-QQQ-SPY
+  classification: market_wide_halt
+  status: observed
+  symbols:
+  - QQQ
+  - SPY
+  provider: '*'
+  feed: '*'
+  date: '2020-03-12'
+  timezone: America/New_York
+  start_local: 09:36
+  end_local: 09:50
+  start_utc: '2020-03-12T13:36:00Z'
+  end_utc: '2020-03-12T13:50:00Z'
+  retry_appropriate: false
+  invalidates_event_window: false
+  evidence: Identical no-bar interval 09:36-09:49 ET (inclusive bar starts, 14 minutes) in BOTH QQQ and SPY Alpaca
+    SIP data, with normal trading before and after. Its timing matches the publicly reported Level-1 (7%) market-wide
+    circuit-breaker halt of this date (15-minute halt). The interval is the OBSERVED no-bar interval, not taken
+    from an authoritative halt record.
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_{QQQ,SPY}_1min_raw_2020.json)
+  notes: 'Scoped to the observed symbols: after a market-wide halt each security reopens via its own auction, so
+    the no-bar interval is not assumed for other symbols. Upgrade status to ''authoritative'' only with an exchange
+    halt notice attached as source.'
+- id: halt-2020-03-16-QQQ-SPY
+  classification: market_wide_halt
+  status: observed
+  symbols:
+  - QQQ
+  - SPY
+  provider: '*'
+  feed: '*'
+  date: '2020-03-16'
+  timezone: America/New_York
+  start_local: 09:31
+  end_local: 09:45
+  start_utc: '2020-03-16T13:31:00Z'
+  end_utc: '2020-03-16T13:45:00Z'
+  retry_appropriate: false
+  invalidates_event_window: false
+  evidence: Identical no-bar interval 09:31-09:44 ET (inclusive bar starts, 14 minutes) in BOTH QQQ and SPY Alpaca
+    SIP data, with normal trading before and after. Its timing matches the publicly reported Level-1 (7%) market-wide
+    circuit-breaker halt of this date (15-minute halt). The interval is the OBSERVED no-bar interval, not taken
+    from an authoritative halt record.
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_{QQQ,SPY}_1min_raw_2020.json)
+  notes: 'Scoped to the observed symbols: after a market-wide halt each security reopens via its own auction, so
+    the no-bar interval is not assumed for other symbols. Upgrade status to ''authoritative'' only with an exchange
+    halt notice attached as source.'
+- id: halt-2020-03-18-QQQ-SPY
+  classification: market_wide_halt
+  status: observed
+  symbols:
+  - QQQ
+  - SPY
+  provider: '*'
+  feed: '*'
+  date: '2020-03-18'
+  timezone: America/New_York
+  start_local: '12:57'
+  end_local: '13:11'
+  start_utc: '2020-03-18T16:57:00Z'
+  end_utc: '2020-03-18T17:11:00Z'
+  retry_appropriate: false
+  invalidates_event_window: false
+  evidence: Identical no-bar interval 12:57-13:10 ET (inclusive bar starts, 14 minutes) in BOTH QQQ and SPY Alpaca
+    SIP data, with normal trading before and after. Its timing matches the publicly reported Level-1 (7%) market-wide
+    circuit-breaker halt of this date (15-minute halt). The interval is the OBSERVED no-bar interval, not taken
+    from an authoritative halt record.
+  source: Alpaca SIP 1-minute backfill + stored-data validation, 2026-10-04 (gap inventory; local reports data/manifests/validation_reports/market_alpaca-sip_{QQQ,SPY}_1min_raw_2020.json)
+  notes: 'Scoped to the observed symbols: after a market-wide halt each security reopens via its own auction, so
+    the no-bar interval is not assumed for other symbols. Upgrade status to ''authoritative'' only with an exchange
+    halt notice attached as source.'
