@@ -277,6 +277,119 @@ wired in):
 - **A missing optional extended-hours minute:** the existing density and
   window-sufficiency rules apply; nothing is fabricated.
 
+## Research layer: macro event -> surprise -> market response
+
+```bash
+python scripts/build_event_response_dataset.py    # local files only; nothing is fetched
+```
+
+It writes:
+- `data/processed/event_response/event_response_v2.parquet` (event × symbol);
+- `event_response_windows_v2.parquet` (release × symbol × window);
+- quality, diagnostics and baseline-evaluation CSVs under
+  `data/reports/event_response/v2/` (versioned; the metadata lists the report inventory with per-file SHA-256);
+- the provenance record `metadata/research/event_response_v2.json`.
+
+The specification lives in `config/event_research.yaml`. The build refuses
+to run if local market data does not match the committed dataset descriptor
+fingerprint.
+
+**Provenance.** The provenance record holds:
+- the market fingerprint;
+- the exception-registry hash;
+- a research-input identity covering:
+  - Forex Factory scientific fields, including grouping, quality, values,
+    units and artifact checksums;
+  - the official reconciliation numbers;
+  - the event mapping;
+  - the specification;
+- the implementation: HEAD, a dirty flag, and a hash of the uncommitted
+  scientific code and config. When dirty, HEAD alone does not reproduce the
+  artifact.
+- canonical content hashes.
+
+Output hashes are serialization-independent: canonical column and row
+order, nulls, floats and UTC timestamps. They are verified after the
+parquet write → read round trip.
+
+**Point-in-time honesty.** `actual`, `forecast`, `previous` and
+`revised_previous` come from Forex Factory historical pages that were saved
+retrospectively (`value_provenance = retrospective_historical_page`).
+- `forecast_point_in_time_status` is always
+  `historical_page_unverified_point_in_time`: no forecast is independently
+  verified.
+- `actual_point_in_time_status` is `official_release_vintage_verified` only
+  where the Forex Factory actual matches an official ALFRED release-vintage
+  value. That holds for 14 of 1,236 events (4 exact, 10 within display
+  rounding, 0 mismatches).
+- Official comparisons are computed from the Forex Factory actual itself.
+  Reconciliation statuses may describe MQL5 values and are never copied, so
+  MQL5 (quarantined) cannot upgrade any verification.
+
+**Events.** Every event is kept with an `event_status`. Excluded events
+(ambiguous, conflicting or nonstandard time, unscheduled FOMC, after the
+research end) never carry a response. A release whose members are all
+excluded has only `event_excluded` window rows, each with a reason.
+- `release_id` is the statistical unit for market responses, together with
+  symbol. Simultaneous release members share one response; cross-family
+  analysis must cluster or aggregate by release (`filters.release_level`).
+- All statistics go through the central filters in
+  `src/research/filters.py`.
+
+**Surprise.** `surprise_raw = actual - forecast`.
+- `surprise_relative` only for NFP with a positive forecast.
+- `surprise_std` is per family. It uses only strictly earlier usable
+  releases, compared by semantic UTC timestamps (resolution-independent),
+  with at least 12 of them.
+- Statuses: `missing_forecast`, `missing_actual`, `insufficient_history`,
+  `zero_historical_dispersion` (std ≤ 1e-9 × max(1, max|history|), giving
+  null, never a giant z-score), and `event_excluded`.
+- FOMC (`FED_FUNDS_RATE`) is a `weak_surprise_proxy`: only 2 non-zero
+  decision surprises in 2016–2026. Its response rows are kept, but surprise
+  inference needs fed funds futures or OIS, which are not available here.
+
+**Alignment and windows.** Bars are stamped at the interval start. The
+pre-release reference price is the close of the bar starting at t−1m.
+`post h` covers bars t … t+h−1 (`post1m` = the release-minute bar); `pre k`
+covers bars t−k … t−1. Release times are scheduled minutes
+(`release_bar_timing_status = minute_precision`): the release bar may
+contain seconds of pre-publication trading.
+
+Pre-release windows are 60, 30, 15, 5 and 1 minutes; post-release windows
+are 1, 2, 5, 15, 30 and 60. Each window has: ret, logret, high and low
+excursion, range, realized absolute and squared returns, volume, and
+volume_rel. mfe and mae are ex-post response characterizations, never
+predictors.
+
+Features exist only when every expected bar exists. Every window queries
+the exception registry, giving one of these statuses:
+`provider_gap_in_window`, `ok_market_halt`, `exchange_closed`,
+`insufficient_market_window`, `provisional_market_data` or
+`event_excluded`.
+
+`volume_rel` searches backward, over at most 60 sessions, for up to 20 valid
+comparable windows. A valid window is:
+- strictly earlier;
+- at the same local clock minutes;
+- under the same per-minute session classification, so early-close
+  after-hours minutes never stand in for regular-session minutes;
+- free of any registry hit;
+- complete.
+
+Fewer than 10 valid windows gives `insufficient_comparable_history`.
+
+**Baseline and split.** `expected_post{h}m_ret` is a walk-forward / online
+expanding mean of the same symbol/family/surprise-sign group's strictly
+earlier usable responses, including earlier validation and test releases.
+It is not a frozen development model. Each row records the training cutoff
+and history count.
+
+The chronological split (development 2016–2020, validation 2021–2022, test
+2023-01-01 to 2026-09-30) was chosen on calendar and sample-size grounds
+after inspecting event counts. It was not pre-registered, and no rule was
+tuned on test results. 2026-10-01/02 market data is provisional and
+excluded.
+
 ## Setup
 
 ```bash

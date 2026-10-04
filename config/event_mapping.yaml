@@ -92,3 +92,42 @@ AVG_HOURLY_EARNINGS_YOY:
     - "Average Hourly Earnings y/y"
   forex_factory:
     - "Average Hourly Earnings y/y"
+
+# ---- added for the macro event -> market response research layer ----
+# Forex Factory names only: these families have no MQL5 mapping and no FRED
+# official series configured (no official/revised values are available for them).
+
+CORE_PCE_MOM:
+  indicator: "Core PCE Price Index MoM"
+  value_unit: "PERCENT"
+  release_bundle: "PCE"
+  forex_factory:
+    - "Core PCE Price Index m/m"
+
+GDP_ADVANCE_QOQ:
+  indicator: "GDP QoQ (advance estimate)"
+  value_unit: "PERCENT"
+  release_bundle: "GDP"
+  forex_factory:
+    - "Advance GDP q/q"
+
+GDP_PRELIM_QOQ:
+  indicator: "GDP QoQ (second / preliminary estimate)"
+  value_unit: "PERCENT"
+  release_bundle: "GDP"
+  forex_factory:
+    - "Prelim GDP q/q"
+
+GDP_FINAL_QOQ:
+  indicator: "GDP QoQ (third / final estimate)"
+  value_unit: "PERCENT"
+  release_bundle: "GDP"
+  forex_factory:
+    - "Final GDP q/q"
+
+FED_FUNDS_RATE:
+  indicator: "Federal Funds Rate (FOMC decision, upper bound)"
+  value_unit: "PERCENT"
+  release_bundle: "FOMC"
+  forex_factory:
+    - "Federal Funds Rate"
