@@ -30,29 +30,18 @@
   },
   "dataset": "event_response_v2",
   "fomc_note": "FED_FUNDS_RATE surprise = decision - Forex Factory forecast: 2 non-zero values 2016-2026; a weak_surprise_proxy. FOMC market-response rows are kept, but surprise-response inference needs a pre-decision market-implied expectation (fed funds futures, OIS), which is not available.",
-  "generated_at_utc": "2026-10-04T20:42:55+00:00",
+  "generated_at_utc": "2026-10-04T21:10:58+00:00",
   "implementation": {
-    "head_commit": "b3adb1aaefd6045b92322199f6fa5315d120e04b",
-    "note": "HEAD alone does NOT reproduce this artifact: it was built from uncommitted changes identified by uncommitted_changes_sha256",
+    "head_commit": "e7cad1a72556afb9d2181302befbf9685cdee4b8",
+    "note": "built from a clean tree at HEAD",
     "scientific_paths": [
       "src",
       "scripts",
       "config"
     ],
-    "uncommitted_changes_sha256": "b2a5d522d51330c641e3ce7c729979d7241fb480a8e5aeb5a4cfc89a74328901",
-    "untracked_scientific_files": [
-      "config/event_research.yaml",
-      "scripts/build_event_response_dataset.py",
-      "src/research/__init__.py",
-      "src/research/baseline.py",
-      "src/research/dataset.py",
-      "src/research/diagnostics.py",
-      "src/research/event_response.py",
-      "src/research/events.py",
-      "src/research/filters.py",
-      "src/research/surprise.py"
-    ],
-    "working_tree_dirty": true
+    "uncommitted_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "untracked_scientific_files": [],
+    "working_tree_dirty": false
   },
   "inputs": {
     "known_exception_registry": {
