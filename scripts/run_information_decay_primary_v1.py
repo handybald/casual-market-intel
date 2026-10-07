@@ -201,7 +201,7 @@ def svg_points_plot(path: Path, title: str, ylab: str, horizons: Sequence[int],
                     series: List[Dict[str, Any]], boundary_h: int, note: str) -> None:
     """Categorical-horizon point plot (markers + optional intervals). Points are NOT connected, so
     nothing is interpolated between horizons and no monotone shape is implied."""
-    W, H, L, R, T, B = 760, 440, 80, 190, 50, 70
+    W, H, L, R, T, B = 760, 460, 80, 190, 50, 90
     vals = [v for s in series for v in list(s["y"]) + list(s.get("lo", [])) + list(s.get("hi", []))]
     ymin, ymax = min(vals + [0.0]), max(vals + [0.0])
     pad = 0.08 * (ymax - ymin or 1.0)
@@ -237,7 +237,8 @@ def svg_points_plot(path: Path, title: str, ylab: str, horizons: Sequence[int],
         o.append(f'<circle cx="{W - R + 18}" cy="{y}" r="4.5" fill="{s["color"]}"/>' if s.get("marker", "o") == "o" else
                  f'<rect x="{W - R + 14}" y="{y - 4}" width="8" height="8" fill="none" stroke="{s["color"]}" stroke-width="1.5"/>')
         o.append(f'<text x="{W - R + 30}" y="{y + 4}">{s["label"]}</text>')
-    o.append(f'<text x="{L}" y="{H - 10}" font-size="10" fill="#444">{note}</text>')
+    for k, line in enumerate(note.split("\n")):   # footnote lines (caveats must stay fully visible)
+        o.append(f'<text x="{L}" y="{H - 24 + 13 * k}" font-size="10" fill="#444">{line}</text>')
     o.append("</svg>")
     path.write_text("\n".join(o) + "\n", encoding="utf-8")
 
@@ -358,7 +359,7 @@ def main(argv=None) -> int:
                       "y": [x["effective_bits"] for x in rows if x["family"] == f],
                       "lo": [x["bootstrap_low"] for x in rows if x["family"] == f],
                       "hi": [x["bootstrap_high"] for x in rows if x["family"] == f]} for f in cfg["families"]],
-                    cfg["session_boundary_horizon_min"], note + " Bars: nominal 95% percentile bootstrap (synthetic coverage ~0.93).")
+                    cfg["session_boundary_horizon_min"], note + "\nBars: nominal 95% percentile bootstrap interval of effective GCMI (synthetic coverage ~0.93, not 0.95).")
     svg_points_plot(OUT_DIR / "plot2_raw_gcmi_and_null.svg", "SPY primary: raw GCMI (filled) and permutation-null mean (open)",
                     "bits", H,
                     [s for f in cfg["families"] for s in (
