@@ -971,8 +971,99 @@ def test_exact_size_rule_and_wilson_boundary():
     assert not a3.global_qualification(cells)["qualifies"]              # one exact-size FAIL blocks
 
 
+REAL_DATA_RUNNERS = {"run_information_decay_primary_v1.py"}   # the only scripts allowed to read real data
+
+
 def test_all_information_decay_runners_reference_no_real_data_paths():
     for p in sorted((REPO / "scripts").glob("*information_decay*.py")):
+        if p.name in REAL_DATA_RUNNERS:
+            continue
         text = p.read_text()
         for forbidden in ("event_response_v", "read_parquet(", "data/processed/event_response", "macro_market_response"):
             assert forbidden not in text, (p, forbidden)
+
+
+# =================================================================================================
+# Primary real-data runner: logic tested on SYNTHETIC frames only (no real data is read here)
+# =================================================================================================
+def _primary_runner():
+    spec = _ilu.spec_from_file_location("primary_v1", REPO / "scripts" / "run_information_decay_primary_v1.py")
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _synthetic_event_frame(n=40, seed=0):
+    rng = np.random.default_rng(seed)
+    H = [1, 5, 15, 30, 60]
+    rows = []
+    for fam in ("CPI_MOM", "NFP"):
+        for i in range(n):
+            r = {"event_family": fam, "symbol": "SPY", "event_status": "usable", "surprise_std_status": "ok",
+                 "surprise_std": float(rng.standard_normal()), "surprise_raw": float(rng.choice([-0.1, 0.0, 0.1])),
+                 "provisional_market_data": False, "release_id": f"{fam}-{i:03d}",
+                 "release_timestamp_utc": pd.Timestamp("2017-01-01", tz="UTC") + pd.Timedelta(days=30 * i),
+                 "split": ["development", "validation", "test"][min(2, i * 3 // n)]}
+            for h in H:
+                r[f"post{h}m_status"] = "ok"
+                r[f"post{h}m_ret"] = float(rng.standard_normal())
+            rows.append(r)
+    df = pd.DataFrame(rows)
+    df.loc[3, "post60m_status"] = "insufficient_market_window"      # excluded at ALL horizons
+    df.loc[3, "post60m_ret"] = np.nan
+    df.loc[5, "surprise_std_status"] = "insufficient_history"
+    return df
+
+
+def test_primary_cohort_is_common_support_and_release_unique():
+    m = _primary_runner()
+    df = _synthetic_event_frame()
+    c = m.build_cohort(df, "CPI_MOM", "SPY", [1, 5, 15, 30, 60])
+    assert len(c) == 38 and "CPI_MOM-003" not in set(c["release_id"]) and "CPI_MOM-005" not in set(c["release_id"])
+    assert c["release_timestamp_utc"].is_monotonic_increasing
+    chk = m.verify_cohort(c, "CPI_MOM", 38, [1, 5, 15, 30, 60])
+    assert chk["problems"] == [] and len(chk["cohort_id"]) == 16
+    assert m.verify_cohort(c, "CPI_MOM", 39, [1, 5, 15, 30, 60])["problems"]          # count mismatch -> STOP
+    dup = pd.concat([c, c.iloc[:1]], ignore_index=True)
+    assert any("unique" in p for p in m.verify_cohort(dup, "CPI_MOM", 39, [1, 5, 15, 30, 60])["problems"])
+    drift = c.copy()
+    drift.loc[0, "post15m_ret"] = np.nan
+    assert any("drift" in p for p in m.verify_cohort(drift, "CPI_MOM", 38, [1, 5, 15, 30, 60])["problems"])
+    assert m.cohort_id(list(c["release_id"])) == m.cohort_id(list(reversed(c["release_id"])))
+
+
+def test_primary_panel_deterministic_and_shared_permutation():
+    m = _primary_runner()
+    df = _synthetic_event_frame()
+    c = m.build_cohort(df, "NFP", "SPY", [1, 5, 15, 30, 60])
+    labels = m.strata_labels(c, ["development", "validation", "test"], 8)
+    S, raw = c["surprise_std"].to_numpy(), c["surprise_raw"].to_numpy()
+    Y = np.column_stack([c[f"post{h}m_ret"].to_numpy() for h in [1, 5, 15, 30, 60]])
+    cid = m.cohort_id(c["release_id"])
+    a = m.analyse_panel(S, raw, Y, labels, "NFP", cid, "B", "chronological_split_v1_min8", "gcmi_B", 199, 50)
+    b = m.analyse_panel(S, raw, Y, labels, "NFP", cid, "B", "chronological_split_v1_min8", "gcmi_B", 199, 50)
+    for k in ("obs", "null_mean", "p_unadj", "p_adj", "boot_raw_lo", "boot_raw_hi"):
+        np.testing.assert_array_equal(a[k], b[k])
+    zs = cal.tie_policy_scores(S, raw, "B", None)
+    zy = np.column_stack([gcmi.copnorm(Y[:, j]) for j in range(5)])
+    np.testing.assert_allclose(a["obs"], gcmi.gcmi_from_scores(zs[None], zy.T[None])[0])
+    assert "horizon" not in a["seeds"]["permutation"]["key"]                    # one draw for all horizons
+    assert a["seeds"]["permutation"]["key"].startswith("m3_information_decay|v1|permutation|family=NFP|cohort=")
+    assert np.all(a["p_adj"] >= a["p_unadj"]) and a["p_unadj"].min() >= 1 / 200
+
+
+def test_holm_closed_testing_rule():
+    m = _primary_runner()
+    H = [1, 5, 15, 30, 60]
+    out = m.holm_closed_testing({"A": 0.001, "B": 0.02, "C": 0.30},
+                                {"A": {"horizons": H, "p": [0.001, 0.01, 0.02, 0.2, 0.5]},
+                                 "B": {"horizons": H, "p": [0.02, 0.03, 0.2, 0.3, 0.4]},
+                                 "C": {"horizons": H, "p": [0.3] * 5}}, 0.05)
+    assert out["A"]["panel_rejected"] and out["A"]["holm_threshold"] == pytest.approx(0.05 / 3)
+    assert out["A"]["detectable_horizons"] == [1, 5]
+    assert out["B"]["panel_rejected"] and out["B"]["detectable_horizons"] == [1]
+    assert not out["C"]["panel_rejected"] and out["C"]["detectable_horizons"] == []
+    assert out["B"]["holm_adjusted_p"] == pytest.approx(0.04)
+    out2 = m.holm_closed_testing({"A": 0.03, "B": 0.001}, {"A": {"horizons": H, "p": [0.03] * 5},
+                                                           "B": {"horizons": H, "p": [0.001] * 5}}, 0.05)
+    assert out2["A"]["panel_rejected"]          # step-down: second panel tested at 0.05/1

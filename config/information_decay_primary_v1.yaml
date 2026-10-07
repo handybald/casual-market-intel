@@ -1,0 +1,35 @@
+# M3 information decay v1 -- PRIMARY real-data run specification.
+# Encodes the frozen protocol only (methodology d976c3e + Amendments 02-04, calibration freeze tag
+# m3-information-decay-calibration-freeze = f08fe85). No scientific choice is made here.
+experiment_id: "m3_information_decay_v1"
+analysis: "primary_v1"
+calibration_freeze:
+  tag: "m3-information-decay-calibration-freeze"
+  commit: "f08fe850c142fed595e847ce03d6931908587c6d"
+protocol_commits:
+  methodology: "d976c3e408ec770ffa6633af22b422d3814e0e16"
+  amendment_02: "e18d46e1110753923df6230ec388ca453b9ecd4e"
+  amendment_03: "cef704ed34d971487ddcc5e9525da2ca1735e77a"
+  amendment_04: "9f4bef157cd490f848cb3544ab92475def430edc"
+
+input:
+  research_metadata: "metadata/research/event_response_v2.json"   # dataset path + content hash come from here
+  research_spec: "config/event_research.yaml"                     # frozen strata (split) dates
+
+symbol: "SPY"
+families: ["CPI_MOM", "CORE_CPI_MOM", "NFP"]                      # primary family panels (Holm family)
+horizons_min: [1, 5, 15, 30, 60]
+response: "raw"                                                    # R_h = post{h}m_ret (Amendment 02 §1.1)
+cohort: "cs_raw"                                                   # methodology §7.1 rules 1-4 on these horizons
+expected_n: {CPI_MOM: 93, CORE_CPI_MOM: 93, NFP: 103}              # methodology §7.2 / Amendment 04 §1
+
+estimator: {name: "gcmi", tie_policy: "B", key: "gcmi_B"}          # D1 / D3
+strata:
+  order: ["development", "validation", "test"]                     # chronological, from the frozen split
+  min_stratum_size: 8                                              # merge rule, methodology §11.2
+  policy_label: "chronological_split_v1_min8"
+permutations: 10000                                                # + observed statistic: p = (1+#)/(B+1)
+bootstrap: {replicates: 2000, method: "stratified_percentile", interval: 0.95}
+alpha: 0.05
+holm_family: ["CPI_MOM", "CORE_CPI_MOM", "NFP"]
+session_boundary_horizon_min: 60                                   # 08:30 ET release: 60m window ends at 09:30 open
