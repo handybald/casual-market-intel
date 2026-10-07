@@ -1,0 +1,133 @@
+# M3 information-decay v1 -- SYNTHETIC estimator calibration specification.
+#
+# Pre-analysis protocol: docs/research/information_decay_v1_methodology.md, frozen at commit
+# d976c3e408ec770ffa6633af22b422d3814e0e16 ("Freeze M3 information-decay methodology").
+# Every value here is fixed BEFORE the final calibration run and is part of the calibration
+# config hash recorded in metadata/research/information_decay_calibration_v1.json.
+# Nothing here reads, or was derived from, real surprise / response / residual values.
+
+experiment_id: "m3_information_decay_v1"
+calibration_version: 1
+methodology:
+  path: "docs/research/information_decay_v1_methodology.md"
+  freeze_commit: "d976c3e408ec770ffa6633af22b422d3814e0e16"
+
+horizons_min: [1, 5, 15, 30, 60]          # D0 (ratified): residual / matched-raw profile horizons
+alpha: 0.05
+strata:
+  proportions: [0.30, 0.25, 0.45]          # chronological strata shares (methodology §9.1)
+  min_stratum_size: 8                      # merge rule, methodology §11.2
+reference_rho: 0.35                        # D2 reference effect; I_ref = -1/2 log2(1 - 0.35^2) = 0.0943 bits
+
+sample_sizes:
+  grid: [40, 60, 80, 100, 120]
+  exact_cohort_sizes: [56, 74, 77, 97]     # real cohort sizes documented in methodology §7.2 (counts only)
+
+estimators:
+  ksg_k: [3, 5, 10]
+  ksg_jitter_sd: 1.0e-10                   # z-units, seeded; breaks exact ties only
+  histogram_bins: 4                        # equal-frequency; calibration-only illustration
+  subsample_fraction: 0.7                  # m_s = floor(0.7 n_s) per stratum (D5 option c, D7)
+
+surprise_modes:
+  burn_in: 12                              # frozen standardization min_history
+  continuous_raw: {mean: 0.3, sd: 1.0}     # NFP-like mode B raw surprise
+  discrete_raw:                            # CPI-like mode B raw surprise (methodology §9.1)
+    values: [-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4]
+    probs:  [0.01, 0.03, 0.08, 0.22, 0.35, 0.20, 0.07, 0.03, 0.01]
+  zero_dispersion_rel_tol: 1.0e-9
+baseline_replica:
+  min_history: 8                           # frozen M2 baseline rule
+
+scenario_parameters:
+  s3a_copula: {rho: 0.35, s_power: 3, r_exp_scale: 1.5}
+  s7_outliers: {fraction: 0.02, s_value: 4.0, r_value: -10.0}
+  s9_trend: {mean_slope: 0.6, sd_slope: 1.0}
+  s10_regime: {means: [-0.4, 0.0, 0.4], sds: [1.0, 1.5, 0.8]}
+  strength_search_upper: 5.0               # bisection bracket [0, 5] for strength-calibrated scenarios
+
+# Decision constants (methodology §9.3, §10). Fixed before any final result is examined.
+decision_rules:
+  acceptance_mcse_multiplier: 2.0          # type-I acceptable if rate <= alpha + 2 * sqrt(alpha(1-alpha)/R)
+  min_n_for_validity: 60                   # V1-V4 and D3/D4/D5/D7/D8 evaluated at grid n >= 60
+  v3_relative_tolerance: 0.10              # mean MI_eff <= truth + 2 MCSE + 0.10 truth
+  d2_power: 0.80                           # horizon-adjusted panel power at reference rho
+  d2_relative_bias: 0.20                   # |mean MI_eff - I_ref| <= 0.20 I_ref
+  d5_min_coverage: 0.90                    # eligibility: min coverage over rho >= 0.25 cells
+  d5_nominal: 0.95
+  d5_min_rho_for_eligibility: 0.25
+  d6_power_difference: 0.05
+  # D8 operationalization (fixed before the final run): the frozen text "per-horizon KSG null means
+  # differ by more than 20%" is read on the null's own scale, because KSG null means are ~0 and can
+  # be negative, so a plain ratio of means is undefined. Studentize if, for any k at grid n >= 60,
+  # (max_h null_mean - min_h null_mean) > 0.20 * mean_h null_sd, OR max_h null_sd / min_h null_sd > 1.20.
+  d8_null_imbalance: 0.20
+
+# Replication / resampling counts. `final` feeds amendment 01; `dev` and `test` are labelled as such.
+# The final KSG counts were fixed from a timing-only benchmark (scripts/... --benchmark), before
+# any estimator output of a final run was examined.
+profiles:
+  final:
+    reps: 2000                 # Monte Carlo replicates per cell (GCMI, correlations, I_lin, histogram)
+    reps_ksg: 1500             # replicates (the first ones) that also run KSG permutation inference.
+                               # Timing-only benchmark (2026-10-05): 1000 -> ~33k CPU s (~55 min wall @10
+                               # workers); 2000 -> ~1.8 h projected. 1500 = largest count inside the ~2 h
+                               # budget with margin for efficiency cores. Fixed before any final output.
+    reps_coverage: 2000        # GCMI interval-coverage replicates (coverage cells only)
+    reps_ksg_coverage: 500     # KSG interval-coverage replicates (coverage cells only)
+    perms_gcmi: 1000           # permutations per replicate (GCMI, correlations; Null A and Null B)
+    perms_ksg: 200             # first perms_ksg of the same permutations, for KSG
+    boot_gcmi: 500
+    subsample_gcmi: 500
+    boot_ksg: 200
+    subsample_ksg: 200
+  dev:
+    reps: 60
+    reps_ksg: 30
+    reps_coverage: 60
+    reps_ksg_coverage: 20
+    perms_gcmi: 199
+    perms_ksg: 99
+    boot_gcmi: 200
+    subsample_gcmi: 200
+    boot_ksg: 60
+    subsample_ksg: 60
+  test:
+    reps: 4
+    reps_ksg: 2
+    reps_coverage: 3
+    reps_ksg_coverage: 2
+    perms_gcmi: 39
+    perms_ksg: 19
+    boot_gcmi: 30
+    subsample_gcmi: 30
+    boot_ksg: 10
+    subsample_ksg: 10
+
+# Calibration cells. `sizes`: grid | grid+exact. `is_null`: true if the data-generating process has
+# no S-R dependence (type-I cell). Flags select the extra analyses run inside each replicate.
+cells:
+  - {id: s1_null_modeA,          scenario: s1_null,        mode: A,      is_null: true,  sizes: grid+exact, unrestricted: true}
+  - {id: s1_null_modeB,          scenario: s1_null,        mode: B_cont, is_null: true,  sizes: grid+exact}
+  - {id: s1h_null_hetero,        scenario: s1h_null_hetero, mode: A,     is_null: true,  sizes: grid}
+  - {id: s2_rho015,              scenario: s2_gaussian,    mode: A,      is_null: false, sizes: grid, rho: 0.15, coverage: true}
+  - {id: s2_rho025,              scenario: s2_gaussian,    mode: A,      is_null: false, sizes: grid, rho: 0.25, coverage: true}
+  - {id: s2_rho035_modeA,        scenario: s2_gaussian,    mode: A,      is_null: false, sizes: grid+exact, rho: 0.35, coverage: true}
+  - {id: s2_rho035_modeB,        scenario: s2_gaussian,    mode: B_cont, is_null: false, sizes: grid+exact, rho: 0.35}
+  - {id: s2_rho050,              scenario: s2_gaussian,    mode: A,      is_null: false, sizes: grid, rho: 0.50, coverage: true}
+  - {id: s3a_copula_monotone,    scenario: s3a_copula,     mode: A,      is_null: false, sizes: grid, coverage: true}
+  - {id: s3b_monotone_tanh,      scenario: s3b_tanh,       mode: A,      is_null: false, sizes: grid}
+  - {id: s4_u_shape,             scenario: s4_u_shape,     mode: A,      is_null: false, sizes: grid}
+  - {id: s5_heteroskedastic,     scenario: s5_hetero,      mode: A,      is_null: false, sizes: grid}
+  - {id: s6_null_t3,             scenario: s6_t3,          mode: A,      is_null: true,  sizes: grid+exact, beta: 0.0}
+  - {id: s6_alt_t3,              scenario: s6_t3,          mode: A,      is_null: false, sizes: grid}
+  - {id: s7_null_contaminated,   scenario: s7_outliers,    mode: A,      is_null: false, sizes: grid, rho: 0.0}
+  - {id: s7_alt_contaminated,    scenario: s7_outliers,    mode: A,      is_null: false, sizes: grid, rho: 0.35}
+  - {id: s8_null_modeA,          scenario: s8_residual,    mode: A,      is_null: true,  sizes: grid+exact, rho: 0.0}
+  - {id: s8_null_modeB_cont,     scenario: s8_residual,    mode: B_cont, is_null: true,  sizes: grid+exact, rho: 0.0}
+  - {id: s8_null_modeB_disc,     scenario: s8_residual,    mode: B_disc, is_null: true,  sizes: grid+exact, rho: 0.0}
+  - {id: s8_null_t3,             scenario: s8_residual,    mode: A,      is_null: true,  sizes: grid, rho: 0.0, t3: true}
+  - {id: s8_alt_modeA,           scenario: s8_residual,    mode: A,      is_null: false, sizes: grid, rho: 0.35}
+  - {id: s9_null_discrete,       scenario: s9_discrete,    mode: B_disc, is_null: true,  sizes: grid+exact, rho: 0.0}
+  - {id: s9_alt_discrete,        scenario: s9_discrete,    mode: B_disc, is_null: false, sizes: grid, rho: 0.35}
+  - {id: s10_regime_null,        scenario: s10_regime,     mode: A,      is_null: true,  sizes: grid+exact, unrestricted: true}

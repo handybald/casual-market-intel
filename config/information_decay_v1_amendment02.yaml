@@ -1,0 +1,77 @@
+# M3 information decay v1 -- Amendment 02 TARGETED synthetic revalidation.
+#
+# Protocol: docs/research/information_decay_v1_amendment_02.md, committed BEFORE any revalidation
+# result at e18d46e1110753923df6230ec388ca453b9ecd4e ("Revise M3 calibration criteria after
+# synthetic review"). This file only encodes that frozen protocol. Base scenario definitions,
+# estimator settings and seeds come from config/information_decay_v1.yaml; cells reuse their
+# Amendment-01 ids, so replicate r of a reused cell has exactly the Amendment-01 seed.
+# SYNTHETIC ONLY: nothing here reads real surprise / response / residual values.
+
+experiment_id: "m3_information_decay_v1"
+revalidation_version: 1
+base_config: "config/information_decay_v1.yaml"
+amendment:
+  path: "docs/research/information_decay_v1_amendment_02.md"
+  commit: "e18d46e1110753923df6230ec388ca453b9ecd4e"
+amendment_01:
+  outputs_dir: "data/reports/information_decay/calibration_v1"
+  combined_sha256: "c451c13fb1cee3c413e575f60ff5cbdcdf54a7c9f48150f964135351b6b8fbfc"
+
+hard_sizes: [60, 77, 80, 97, 100, 120]        # Amendment 02 §4 (77, 97 = SPY primary cohort sizes)
+
+mc_rule:                                       # Amendment 02 §4 (chosen by the project owner)
+  method: "holm_wilson_alpha_split_over_looks"
+  ceiling_reference_reps: 2000                 # ceiling = 0.05 + 2 sqrt(0.05*0.95/2000) = 0.0597468, fixed
+  nominal_alpha: 0.05                          # max-T panel rejection level inside each replicate
+  family_alpha: 0.05
+  max_looks: 5
+  alpha_per_look: 0.01                         # family_alpha / max_looks (Bonferroni over looks)
+  batch_reps: 2000
+  max_reps: 10000
+
+# Replicate-internal counts (identical to the Amendment-01 final profile for GCMI). KSG is off
+# except where a cell asks for it (V4a descriptive).
+counts:
+  reps: 2000
+  reps_ksg: 0
+  reps_coverage: 2000
+  reps_ksg_coverage: 0
+  perms_gcmi: 1000
+  perms_ksg: 200
+  boot_gcmi: 500
+  subsample_gcmi: 500
+  boot_ksg: 200
+  subsample_ksg: 200
+
+# Hard-gate family H (42 items) -- Amendment 02 §4.
+hard_family:
+  - {gate: V1, cell: s1_null_modeA,   policies: [A]}
+  - {gate: V1, cell: s1_null_modeB,   policies: [A]}
+  - {gate: V1, cell: s6_null_t3,      policies: [A]}
+  - {gate: V1, cell: s10_regime_null, policies: [A]}
+  - {gate: V2_D3, cell: s9_null_discrete, policies: [A, B]}
+  - {gate: V4a, cell: s7v4a_null_independent_contamination, policies: [A]}
+
+# Secondary residual family R (12 items) -- Amendment 02 §9; policy = the D3-selected policy.
+residual_family:
+  cells: [s8_null_t3, s8_null_modeB_disc]
+  procedure: nullB
+  diagnostic_procedures: [nullA, matched_raw]
+
+# Coverage recomputation (group D) -- Amendment 02 §10 D5. GCMI only, original seeds.
+coverage_cells:
+  - {cell: s2_rho015,           sizes: [60, 80, 100, 120]}
+  - {cell: s2_rho025,           sizes: [60, 80, 100, 120]}
+  - {cell: s2_rho035_modeA,     sizes: [60, 77, 80, 97, 100, 120]}
+  - {cell: s2_rho050,           sizes: [60, 80, 100, 120]}
+  - {cell: s3a_copula_monotone, sizes: [60, 80, 100, 120]}
+
+# Revised V3 (Amendment 02 §3.1), evaluated from stored Amendment-01 rows.
+v3_cells: [s2_rho015, s2_rho025, s2_rho035_modeA, s2_rho050, s3a_copula_monotone, s3b_monotone_tanh, s6_alt_t3]
+v3_sizes: [60, 77, 80, 97, 100, 120]           # sizes not stored for a cell are skipped (grid-only cells)
+v4b_cells: [s7_alt_contaminated, s7_null_contaminated]
+
+# New cell (Amendment 02 §3.2). KSG descriptive on the first 1000 replicates.
+new_cells:
+  - {id: s7v4a_null_independent_contamination, scenario: s7v4a_indep_contam, mode: A, is_null: true,
+     sizes: grid+exact, reps_ksg: 1000}

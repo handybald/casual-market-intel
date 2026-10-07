@@ -1,0 +1,73 @@
+{
+  "amendment02_outputs_verified": true,
+  "configs": {
+    "amendment02": "9b5cfc628999312c9ebd509db649040daa1647f9b661971081ce7f53d39abff4",
+    "amendment03": "6d9fb0318e4c22bb4573eaded3e92549e592b51809d44a64d7e21040bce7bae1",
+    "base": "bd877f7dfd6d6bb20a6fdd78ba92f40cefb17bbaa5775329eedafde6a70aa5c3"
+  },
+  "dataset": "information_decay_amendment03_qualification",
+  "generated_at_utc": "2026-10-07T21:30:18+00:00",
+  "implementation": {
+    "head_commit": "cef704ed34d971487ddcc5e9525da2ca1735e77a",
+    "uncommitted_changes_sha256": "5552d8bce45d70d7efc3d6361797f6cf04593975702138660d0f1e616d90bf6b",
+    "untracked_scientific_entries": [
+      "config/information_decay_v1.yaml",
+      "config/information_decay_v1_amendment02.yaml",
+      "docs/research/information_decay_v1_amendment_01.md",
+      "docs/research/information_decay_v1_amendment_02_results.md",
+      "scripts/calibrate_information_decay_estimators.py",
+      "scripts/revalidate_information_decay_amendment02.py",
+      "src/research/information_decay/"
+    ],
+    "working_tree_dirty_scientific_paths": true
+  },
+  "outputs": {
+    "combined_sha256": "0ab9ceaef7fc76c6fe7541aaa451f28c3a49d48d2386a64049ace2f5d94f3358",
+    "directory": "data/reports/information_decay/amendment03_qualification",
+    "files_sha256": {
+      "decisions.json": "980b03afbe78f3186f5161b1a3a5c545889101018024adde38ad1f84c533cbd1",
+      "qualification_table.csv": "c40e575eb5cf9977177519b2e1c87cc8fbf3726a782c8cfee0041e0ba2fd20a4",
+      "topup_rows.csv": "15db4f690872869262e6eceb14d68bc1f95c7b5de55cb61ab1a08df81248413a"
+    }
+  },
+  "protocol": {
+    "amendment_02": {
+      "blob_sha1": "d852f4a6e67a28e3963b9e297c00a00ed734c679",
+      "commit": "e18d46e1110753923df6230ec388ca453b9ecd4e",
+      "commit_exists": true,
+      "file_in_commit": true,
+      "path": "docs/research/information_decay_v1_amendment_02.md",
+      "unchanged_since_commit": true
+    },
+    "amendment_03": {
+      "blob_sha1": "09a1fa1cf3f58c4d436db7a62f58c5214bc7126c",
+      "commit": "cef704ed34d971487ddcc5e9525da2ca1735e77a",
+      "commit_exists": true,
+      "file_in_commit": true,
+      "path": "docs/research/information_decay_v1_amendment_03.md",
+      "unchanged_since_commit": true
+    },
+    "amendment_03_oc": {
+      "blob_sha1": "73447e6c7388c1066c620b24719eedfae6331a54",
+      "commit": "cef704ed34d971487ddcc5e9525da2ca1735e77a",
+      "commit_exists": true,
+      "file_in_commit": true,
+      "path": "docs/research/information_decay_v1_amendment_03_oc.json",
+      "unchanged_since_commit": true
+    },
+    "methodology": {
+      "blob_sha1": "f6199450ec23de9dca9b6e7f4f28260cae5cec25",
+      "commit": "d976c3e408ec770ffa6633af22b422d3814e0e16",
+      "commit_exists": true,
+      "file_in_commit": true,
+      "path": "docs/research/information_decay_v1_methodology.md",
+      "unchanged_since_commit": true
+    }
+  },
+  "real_market_mi_computed": false,
+  "synthetic_only": true,
+  "topup_replicates": 116000,
+  "topup_tasks": 31,
+  "wall_seconds": 61.8,
+  "workers": 8
+}

@@ -1,0 +1,96 @@
+{
+  "config": {
+    "canonical_sha256": "f5d6a8b9c0e178477b1ad8e54733b58728aaee20e05ba6c32d6bfcba3caf27b8",
+    "path": "config/information_decay_v1.yaml",
+    "sha256": "bd877f7dfd6d6bb20a6fdd78ba92f40cefb17bbaa5775329eedafde6a70aa5c3"
+  },
+  "counts": {
+    "boot_gcmi": 500,
+    "boot_ksg": 200,
+    "perms_gcmi": 1000,
+    "perms_ksg": 200,
+    "reps": 2000,
+    "reps_coverage": 2000,
+    "reps_ksg": 1500,
+    "reps_ksg_coverage": 500,
+    "subsample_gcmi": 500,
+    "subsample_ksg": 200
+  },
+  "cpu_seconds_by_cell": {
+    "s10_regime_null": 6885.9,
+    "s1_null_modeA": 6880.2,
+    "s1_null_modeB": 2975.1,
+    "s1h_null_hetero": 1727.9,
+    "s2_rho015": 2976.4,
+    "s2_rho025": 2974.6,
+    "s2_rho035_modeA": 5051.7,
+    "s2_rho035_modeB": 2971.6,
+    "s2_rho050": 2972.2,
+    "s3a_copula_monotone": 2911.4,
+    "s3b_monotone_tanh": 1724.6,
+    "s4_u_shape": 1724.5,
+    "s5_heteroskedastic": 1726.9,
+    "s6_alt_t3": 1718.4,
+    "s6_null_t3": 2918.3,
+    "s7_alt_contaminated": 1736.5,
+    "s7_null_contaminated": 1714.6,
+    "s8_alt_modeA": 6364.5,
+    "s8_null_modeA": 11013.6,
+    "s8_null_modeB_cont": 11092.3,
+    "s8_null_modeB_disc": 11715.5,
+    "s8_null_t3": 6410.1,
+    "s9_alt_discrete": 3332.0,
+    "s9_null_discrete": 5713.9
+  },
+  "dataset": "information_decay_calibration_v1",
+  "generated_at_utc": "2026-10-05T21:30:35+00:00",
+  "implementation": {
+    "head_commit": "d976c3e408ec770ffa6633af22b422d3814e0e16",
+    "scientific_paths": [
+      "src/research/information_decay",
+      "scripts/calibrate_information_decay_estimators.py",
+      "config/information_decay_v1.yaml",
+      "docs/research"
+    ],
+    "uncommitted_changes_sha256": "5e061aa4d89f43431b764e38c96084f598ec391b22ebd334179a9fb62e1e44ad",
+    "untracked_scientific_entries": [
+      "config/information_decay_v1.yaml",
+      "scripts/calibrate_information_decay_estimators.py",
+      "src/research/information_decay/"
+    ],
+    "working_tree_dirty_scientific_paths": true
+  },
+  "methodology": {
+    "document_unchanged_since_freeze": true,
+    "freeze_commit": "d976c3e408ec770ffa6633af22b422d3814e0e16",
+    "freeze_commit_exists": true,
+    "frozen_blob_sha1": "f6199450ec23de9dca9b6e7f4f28260cae5cec25",
+    "path": "docs/research/information_decay_v1_methodology.md"
+  },
+  "outputs": {
+    "combined_sha256": "c451c13fb1cee3c413e575f60ff5cbdcdf54a7c9f48150f964135351b6b8fbfc",
+    "directory": "data/reports/information_decay/calibration_v1",
+    "files_sha256": {
+      "all_rows.csv": "1f08b886324b70cc34021fe30b24cae8829ab316b0ed29917cf8b20707e6c096",
+      "bootstrap_coverage.csv": "caba206751762ef8c0de41fb0cadec62cf5a96b488c5cce9e8900748bfd083f5",
+      "calibration_summary.json": "a6ffff3523a111df2f4a2823204cbd4fb0f1aa979fd2891aa8832d1a2a63f07a",
+      "estimator_bias.csv": "b49b2f27eefec6ddf8145dfb99511a4f571189029349cd239320b8d714f4d8eb",
+      "estimator_rmse.csv": "023248ba96555f0e31db668a1a0fbaeac3abb0f7e9bffb8d599654910709fa7c",
+      "ksg_null_balance.csv": "b2bb6e07073a112abd059d14943ee88871ab894079055608c8b07ad256dbdcea",
+      "outlier_robustness.csv": "57ceb7f46fc391bed1ad14a92fe389916860f2f02f8036fe1cd3be137bb8a1cc",
+      "power.csv": "85be717d4072af2978b280411ecb033e5e00e2c724094b956ac45f06f1951432",
+      "residual_null_calibration.csv": "05efa36bd2223f23e0a88e7b4c957cb81721b8d1e1983c243afe1a10d6235ed9",
+      "scenario_truth.csv": "2c65affa638bc37ffc2b09685152e3c95ca75a6e34d70862cbdb82c9d49e7a09",
+      "tie_policy.csv": "847f172b6707fc26c042d6373894fc8ee5c0f0321b21b13f38b6b5a954419bbd",
+      "type1_error.csv": "1f41fa14e5ce5835ce7e0f32d82ddf1f24a4924d6038e8fef4d1e5b014185b75"
+    }
+  },
+  "profile": "final",
+  "real_data_guard": "isolation.real_data_guard (main process and every worker)",
+  "real_market_mi_computed": false,
+  "seed_scheme": "sha256('m3_information_decay|v1|calibration|<cell>|<n>|<rep>|<purpose>')[:8] -> PCG64",
+  "synthetic_only": true,
+  "tasks": 160,
+  "wall_seconds": 13475.3,
+  "workers": 8
+}

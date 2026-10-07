@@ -1,0 +1,65 @@
+{
+  "amendment_01_outputs_verified": true,
+  "amendment_02": {
+    "blob_sha1": "d852f4a6e67a28e3963b9e297c00a00ed734c679",
+    "commit": "e18d46e1110753923df6230ec388ca453b9ecd4e",
+    "commit_exists": true,
+    "file_in_commit": true,
+    "path": "docs/research/information_decay_v1_amendment_02.md",
+    "unchanged_since_commit": true
+  },
+  "configs": {
+    "amendment02": {
+      "path": "config/information_decay_v1_amendment02.yaml",
+      "sha256": "9b5cfc628999312c9ebd509db649040daa1647f9b661971081ce7f53d39abff4"
+    },
+    "base": {
+      "path": "config/information_decay_v1.yaml",
+      "sha256": "bd877f7dfd6d6bb20a6fdd78ba92f40cefb17bbaa5775329eedafde6a70aa5c3"
+    }
+  },
+  "dataset": "information_decay_amendment02_revalidation",
+  "generated_at_utc": "2026-10-07T20:13:41+00:00",
+  "implementation": {
+    "head_commit": "e18d46e1110753923df6230ec388ca453b9ecd4e",
+    "uncommitted_changes_sha256": "b73d94571d11812f562e39f1afc59b8256b703910836d6d5061921eab09e4b62",
+    "untracked_scientific_entries": [
+      "config/information_decay_v1.yaml",
+      "config/information_decay_v1_amendment02.yaml",
+      "docs/research/information_decay_v1_amendment_01.md",
+      "scripts/calibrate_information_decay_estimators.py",
+      "scripts/revalidate_information_decay_amendment02.py",
+      "src/research/information_decay/"
+    ],
+    "working_tree_dirty_scientific_paths": true
+  },
+  "methodology": {
+    "blob_sha1": "f6199450ec23de9dca9b6e7f4f28260cae5cec25",
+    "commit": "d976c3e408ec770ffa6633af22b422d3814e0e16",
+    "commit_exists": true,
+    "file_in_commit": true,
+    "path": "docs/research/information_decay_v1_methodology.md",
+    "unchanged_since_commit": true
+  },
+  "outputs": {
+    "combined_sha256": "782efec1dbf0c029b618cb57c9b4c476ffbdaf096e5e2718ab842ae79da311ee",
+    "directory": "data/reports/information_decay/amendment02_revalidation",
+    "files_sha256": {
+      "all_rows.csv": "999043bc23069e3921a4a6923eea12d187e0e339d25925ba60957500bf67bfd1",
+      "coverage_cluster.csv": "6d128704d54cf1914fd817c355fc6dfd97ea588e0c1865d226522db10ce587da",
+      "decisions.json": "337351cbe678ddebf428ff66f38bb9b1128ee33617d0414c4c79c7cd34557f2d",
+      "flagged_cells.csv": "c94f0712bcb3e63267aac687bc2df1b1e1fa5e55c8168efaa02fd692ab49e5cb",
+      "hard_gate_cells.csv": "1214c6ef93de8c64b4b0be0f76271b563f03c605991c8a92305d721a820bede1",
+      "look_history.csv": "c880c38cd036a672974aa9f6af84dbab639360bedaae0ec4b1e2c7b004e9fe30",
+      "reproduction_checks.csv": "5b2b7c21aab861e5df734d40d23209c08e90641b276eb43898209191b1295446",
+      "residual_diagnostics_nullA_matched_raw.csv": "c3c860ca2c1e6cb66d2ef640c6718fe47ab2bd7867921ef2006e5b2ae2a4e382",
+      "residual_family_cells.csv": "45ff02243796722725fb8077c74065a9f118bc16914d4013326b16943ae1d078",
+      "v3_cells.csv": "07aa84baf30de290c1f415c13f73cbb0a036a6c58bd0d6f7f8241953c7089aa8",
+      "v4a_ksg_descriptive.csv": "45a685708c848ae007c5ee2b95591dd3540532813ead362ba8aa239a14e9745b",
+      "v4b_sensitivity.csv": "1e29aef7c9bad4f5e9ce11c392beca2f935a81872a10ccc100c21610efb094dd"
+    }
+  },
+  "real_market_mi_computed": false,
+  "synthetic_only": true,
+  "workers": 8
+}

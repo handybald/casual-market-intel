@@ -1,0 +1,20 @@
+# M3 information decay v1 -- Amendment 03 fixed-sample qualification (SYNTHETIC ONLY).
+# Protocol: docs/research/information_decay_v1_amendment_03.md, committed before any
+# reclassification at cef704ed34d971487ddcc5e9525da2ca1735e77a.
+experiment_id: "m3_information_decay_v1"
+amendment:
+  path: "docs/research/information_decay_v1_amendment_03.md"
+  commit: "cef704ed34d971487ddcc5e9525da2ca1735e77a"
+amendment02_config: "config/information_decay_v1_amendment02.yaml"
+amendment02_outputs:
+  directory: "data/reports/information_decay/amendment02_revalidation"
+  metadata: "metadata/research/information_decay_amendment02_revalidation.json"
+  combined_sha256: "782efec1dbf0c029b618cb57c9b4c476ffbdaf096e5e2718ab842ae79da311ee"
+n_final: 10000
+selected_policy: "B"                 # D3 from Amendment 02; not reopened (Amendment 03 §3.1)
+required:                             # Amendment 03 §3.1 (36 cells at the Amendment-02 hard sizes)
+  - {gate: V1, policy: A}
+  - {gate: V2_D3, policy: B}
+  - {gate: V4a, policy: A}
+report_only:
+  - {gate: V2_D3, policy: A}
