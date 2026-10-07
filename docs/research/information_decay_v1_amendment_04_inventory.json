@@ -1,0 +1,233 @@
+{
+ "amendment": "04",
+ "cell_count": 12,
+ "cells": [
+  {
+   "cell": "s1_null_modeA",
+   "estimator": "gcmi",
+   "gate": "V1",
+   "mode": "A",
+   "n": 93,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s1_null",
+   "seed_identity": "m3_information_decay|v1|calibration|s1_null_modeA|93|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s1_null_modeA",
+   "estimator": "gcmi",
+   "gate": "V1",
+   "mode": "A",
+   "n": 103,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s1_null",
+   "seed_identity": "m3_information_decay|v1|calibration|s1_null_modeA|103|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s1_null_modeB",
+   "estimator": "gcmi",
+   "gate": "V1",
+   "mode": "B_cont",
+   "n": 93,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s1_null",
+   "seed_identity": "m3_information_decay|v1|calibration|s1_null_modeB|93|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s1_null_modeB",
+   "estimator": "gcmi",
+   "gate": "V1",
+   "mode": "B_cont",
+   "n": 103,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s1_null",
+   "seed_identity": "m3_information_decay|v1|calibration|s1_null_modeB|103|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s6_null_t3",
+   "estimator": "gcmi",
+   "gate": "V1",
+   "mode": "A",
+   "n": 93,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s6_t3",
+   "seed_identity": "m3_information_decay|v1|calibration|s6_null_t3|93|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s6_null_t3",
+   "estimator": "gcmi",
+   "gate": "V1",
+   "mode": "A",
+   "n": 103,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s6_t3",
+   "seed_identity": "m3_information_decay|v1|calibration|s6_null_t3|103|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s10_regime_null",
+   "estimator": "gcmi",
+   "gate": "V1",
+   "mode": "A",
+   "n": 93,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s10_regime",
+   "seed_identity": "m3_information_decay|v1|calibration|s10_regime_null|93|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s10_regime_null",
+   "estimator": "gcmi",
+   "gate": "V1",
+   "mode": "A",
+   "n": 103,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s10_regime",
+   "seed_identity": "m3_information_decay|v1|calibration|s10_regime_null|103|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s9_null_discrete",
+   "estimator": "gcmi_B",
+   "gate": "V2_D3",
+   "mode": "B_disc",
+   "n": 93,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s9_discrete",
+   "seed_identity": "m3_information_decay|v1|calibration|s9_null_discrete|93|<rep>|<purpose>",
+   "tie_policy": "B"
+  },
+  {
+   "cell": "s9_null_discrete",
+   "estimator": "gcmi_B",
+   "gate": "V2_D3",
+   "mode": "B_disc",
+   "n": 103,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s9_discrete",
+   "seed_identity": "m3_information_decay|v1|calibration|s9_null_discrete|103|<rep>|<purpose>",
+   "tie_policy": "B"
+  },
+  {
+   "cell": "s7v4a_null_independent_contamination",
+   "estimator": "gcmi",
+   "gate": "V4a",
+   "mode": "A",
+   "n": 93,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s7v4a_indep_contam",
+   "seed_identity": "m3_information_decay|v1|calibration|s7v4a_null_independent_contamination|93|<rep>|<purpose>",
+   "tie_policy": "A"
+  },
+  {
+   "cell": "s7v4a_null_independent_contamination",
+   "estimator": "gcmi",
+   "gate": "V4a",
+   "mode": "A",
+   "n": 103,
+   "procedure": "strat",
+   "replicate_indices": [
+    0,
+    9999
+   ],
+   "replicates": 10000,
+   "scenario": "s7v4a_indep_contam",
+   "seed_identity": "m3_information_decay|v1|calibration|s7v4a_null_independent_contamination|103|<rep>|<purpose>",
+   "tie_policy": "A"
+  }
+ ],
+ "contains_simulation_results": false,
+ "counts_by_gate": {
+  "V1": {
+   "103": 4,
+   "93": 4
+  },
+  "V2_D3": {
+   "103": 1,
+   "93": 1
+  },
+  "V4a": {
+   "103": 1,
+   "93": 1
+  }
+ },
+ "derivation": "required (gate, policy) pairs of config/information_decay_v1_amendment03.yaml x hard_family cells of config/information_decay_v1_amendment02.yaml x n in {93, 103}",
+ "exact_sizes": {
+  "103": "SPY cs_raw NFP (methodology \u00a77.2)",
+  "93": "SPY cs_raw CPI m/m and Core CPI m/m (methodology \u00a77.2)"
+ },
+ "real_market_mi_computed": false,
+ "rule": {
+  "ceiling": 0.059746794344808965,
+  "cross_cell_adjustment": "none (intersection-union)",
+  "looks": 1,
+  "n_final": 10000,
+  "pass_iff": "wilson_upper < ceiling (equivalently false positives <= 558)",
+  "wilson": "one-sided 95% upper",
+  "z": 1.6448536269514722
+ },
+ "source_config_sha256": {
+  "amendment02": "9b5cfc628999312c9ebd509db649040daa1647f9b661971081ce7f53d39abff4",
+  "amendment03": "6d9fb0318e4c22bb4573eaded3e92549e592b51809d44a64d7e21040bce7bae1",
+  "base": "bd877f7dfd6d6bb20a6fdd78ba92f40cefb17bbaa5775329eedafde6a70aa5c3"
+ }
+}
