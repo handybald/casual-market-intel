@@ -1,0 +1,103 @@
+{
+ "ceiling": 0.059746794344808965,
+ "cells_required": 36,
+ "cells_total": 42,
+ "generator": "src/research/information_decay/amendment03.py::run_operating_characteristics (binomial simulation only; no estimator simulated)",
+ "max_passing_false_positives": 558,
+ "n_final": 10000,
+ "per_cell_exact_pass_probability": {
+  "0.045000": 0.9999997887012786,
+  "0.050000": 0.9958987958792468,
+  "0.053000": 0.8976354504642966,
+  "0.059747": 0.048957893011678084,
+  "0.060000": 0.039149814221652555,
+  "0.065000": 7.477513292029023e-05,
+  "0.070000": 5.035336674726752e-09,
+  "0.080000": 3.659145861673105e-21
+ },
+ "real_market_mi_computed": false,
+ "rows": [
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.23825,
+   "configuration": "A: all cells p = 0.05",
+   "new_rule_P_all42_pass_sim": 0.841499,
+   "new_rule_P_qualify_required36_exact": 0.8624768798241514,
+   "new_rule_P_qualify_required36_sim": 0.86232
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.99985,
+   "configuration": "A': all cells p = 0.045",
+   "new_rule_P_all42_pass_sim": 0.999994,
+   "new_rule_P_qualify_required36_exact": 0.9999923932741568,
+   "new_rule_P_qualify_required36_sim": 0.999993
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0,
+   "configuration": "A'': all cells p = 0.053",
+   "new_rule_P_all42_pass_sim": 0.010685,
+   "new_rule_P_qualify_required36_exact": 0.020492731643053923,
+   "new_rule_P_qualify_required36_sim": 0.020522
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0015,
+   "configuration": "B: one cell p = ceiling (0.0597), others 0.05",
+   "new_rule_P_all42_pass_sim": 0.041164,
+   "new_rule_P_qualify_required36_exact": 0.042398937504686526,
+   "new_rule_P_qualify_required36_sim": 0.041992
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0,
+   "configuration": "C1: one cell p = 0.065",
+   "new_rule_P_all42_pass_sim": 6.1e-05,
+   "new_rule_P_qualify_required36_exact": 6.475740667262318e-05,
+   "new_rule_P_qualify_required36_sim": 7e-05
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0,
+   "configuration": "C2: one cell p = 0.07",
+   "new_rule_P_all42_pass_sim": 0.0,
+   "new_rule_P_qualify_required36_exact": 4.360745772614653e-09,
+   "new_rule_P_qualify_required36_sim": 0.0
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0,
+   "configuration": "C3: one cell p = 0.08",
+   "new_rule_P_all42_pass_sim": 0.0,
+   "new_rule_P_qualify_required36_exact": 3.1689251143345415e-21,
+   "new_rule_P_qualify_required36_sim": 0.0
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0,
+   "configuration": "D1: two cells p = ceiling",
+   "new_rule_P_all42_pass_sim": 0.002124,
+   "new_rule_P_qualify_required36_exact": 0.002084310830329546,
+   "new_rule_P_qualify_required36_sim": 0.00203
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0,
+   "configuration": "D2: three cells p = ceiling",
+   "new_rule_P_all42_pass_sim": 0.000108,
+   "new_rule_P_qualify_required36_exact": 0.00010246369114671438,
+   "new_rule_P_qualify_required36_sim": 0.00011
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0,
+   "configuration": "D3: one ceiling + one 0.065",
+   "new_rule_P_all42_pass_sim": 4e-06,
+   "new_rule_P_qualify_required36_exact": 3.1834421335884665e-06,
+   "new_rule_P_qualify_required36_sim": 3e-06
+  },
+  {
+   "amendment02_rule_P_qualify_required36_sim": 0.0,
+   "configuration": "D4: all required cells p = ceiling",
+   "new_rule_P_all42_pass_sim": 0.0,
+   "new_rule_P_qualify_required36_exact": 6.817385947656958e-48,
+   "new_rule_P_qualify_required36_sim": 0.0
+  }
+ ],
+ "seed_label": "amendment03_oc",
+ "seed_scheme": "rng_for(seed_label, rule, configuration) = PCG64(SeedSequence(sha256(...)[:8]))",
+ "sims_amendment02_rule": 20000,
+ "sims_new_rule": 1000000,
+ "z_one_sided_95": 1.6448536269514722
+}
