@@ -1,0 +1,49 @@
+# M3 information decay v1 -- KSG ESTIMATOR-SENSITIVITY run (secondary, exploratory).
+# Encodes the frozen protocol only: methodology §8.2 / §12.3 / §13.3 / §14 item 2 / §17,
+# Amendment 01 D3 (KSG tie policy K-A), Amendment 02 §6 (KSG sensitivity-only), D7 (no formal CI),
+# D8 (raw-MI max-statistic). Nothing is tuned on real data.
+experiment_id: "m3_information_decay_v1"
+analysis: "ksg_sensitivity_v1"
+calibration_freeze: {tag: "m3-information-decay-calibration-freeze", commit: "f08fe850c142fed595e847ce03d6931908587c6d"}
+frozen_results:
+  primary_spy: {tag: "m3-primary-spy-information-profile-v1", commit: "70ee4c1f54cb36eb7808fb5a647e5b7f2cd2aa71",
+                metadata: "metadata/research/information_decay_primary_v1.json", profile: "primary_profile.csv"}
+  residual_spy: {tag: "m3-secondary-spy-residual-profile-v1", commit: "eb2948bcafba8f5a2393efdcb47d81a8267ea5af",
+                 metadata: "metadata/research/information_decay_residual_spy_v1.json"}
+  qqq_replication: {tag: "m3-qqq-replication-v1", commit: "b1ec964da005113ba87cf2c2f089a0bfccb45c1e",
+                    metadata: "metadata/research/information_decay_qqq_replication_v1.json", profile: "qqq_profile.csv"}
+protocol_commits:
+  methodology: "d976c3e408ec770ffa6633af22b422d3814e0e16"
+  amendment_02: "e18d46e1110753923df6230ec388ca453b9ecd4e"
+  amendment_03: "cef704ed34d971487ddcc5e9525da2ca1735e77a"
+  amendment_04: "9f4bef157cd490f848cb3544ab92475def430edc"
+
+input:
+  research_metadata: "metadata/research/event_response_v2.json"
+
+symbols: ["SPY", "QQQ"]                                  # analysed separately, never pooled
+families: ["CPI_MOM", "CORE_CPI_MOM", "NFP"]
+horizons_min: [1, 5, 15, 30, 60]
+response: "raw"
+cohort: "cs_raw"                                         # the frozen, accepted raw cohorts (verified by release-ID hash)
+expected_n:
+  SPY: {CPI_MOM: 93, CORE_CPI_MOM: 93, NFP: 103}
+  QQQ: {CPI_MOM: 80, CORE_CPI_MOM: 80, NFP: 89}
+
+estimator:
+  name: "ksg"
+  algorithm: "KSG algorithm 1, max-norm (Kraskov et al. 2004)"   # src/research/information_decay/ksg.py
+  k: [3, 5, 10]                                          # fixed for every panel, never tuned (methodology §8.2)
+  tie_policy: "K-A"                                      # z-scored surprise_std as given (Amendment 01 D3)
+  jitter_sd_z_units: 1.0e-10                             # seeded, breaks exact ties only (methodology §8.2, §17)
+  units: "bits"
+strata:
+  order: ["development", "validation", "test"]
+  min_stratum_size: 8
+  policy_label: "chronological_split_v1_min8"
+permutations: 10000                                      # same draws as the frozen GCMI runs (keys carry no estimator)
+max_statistic: "raw_mi"                                  # D8
+inference_status: "sensitivity: unadjusted + horizon-adjusted permutation p reported; no Holm; no confirmatory claim"
+confidence_intervals: "none (D7)"
+descriptive_detect_threshold: 0.05                       # horizon-adjusted p, descriptive label only (not a decision)
+session_boundary_horizon_min: 60

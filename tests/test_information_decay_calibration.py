@@ -972,7 +972,8 @@ def test_exact_size_rule_and_wilson_boundary():
 
 
 REAL_DATA_RUNNERS = {"run_information_decay_primary_v1.py", "run_information_decay_residual_spy_v1.py",
-                     "run_information_decay_qqq_replication_v1.py"}  # only these read real data
+                     "run_information_decay_qqq_replication_v1.py",
+                     "run_information_decay_ksg_sensitivity_v1.py"}  # only these read real data
 
 
 def test_all_information_decay_runners_reference_no_real_data_paths():
@@ -1271,3 +1272,73 @@ def test_qqq_runner_has_no_residual_or_ksg_path():
                   "null_b_batch", "run_null_b"):
         assert token not in src, token
     assert not hasattr(m, "add_baseline") and not hasattr(m, "ksg")
+
+
+# =================================================================================================
+# KSG sensitivity runner: logic tested on SYNTHETIC frames only (no real data is read here)
+# =================================================================================================
+def _ksg_runner():
+    spec = _ilu.spec_from_file_location("ksg_v1", REPO / "scripts" / "run_information_decay_ksg_sensitivity_v1.py")
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+KSG_CFG = yaml.safe_load((REPO / "config" / "information_decay_ksg_sensitivity_v1.yaml").read_text())
+
+
+def test_ksg_config_is_frozen_and_k_locked():
+    m = _ksg_runner()
+    m.check_estimator_config(KSG_CFG["estimator"])
+    assert tuple(KSG_CFG["estimator"]["k"]) == (3, 5, 10) == m.FROZEN_K
+    for bad in ({"k": [3, 5, 7]}, {"k": [5]}, {"tie_policy": "K-B"}, {"jitter_sd_z_units": 1e-6}, {"units": "nats"}):
+        with pytest.raises(ValueError):
+            m.check_estimator_config(dict(KSG_CFG["estimator"], **bad))
+    assert KSG_CFG["confidence_intervals"].startswith("none") and KSG_CFG["max_statistic"] == "raw_mi"
+
+
+def test_ksg_frozen_cohort_identity_and_no_pooling():
+    m, p = _ksg_runner(), _primary_runner()
+    df = _two_symbol_frame()
+    H = [1, 5, 15, 30, 60]
+    c = p.build_cohort(df, "NFP", "SPY", H)
+    good = p.verify_cohort(c, "NFP", len(c), H)["release_ids_sha256"]
+    assert m.verify_frozen_cohort(c, len(c), good, H)["problems"] == []
+    assert m.verify_frozen_cohort(c, len(c), "0" * 64, H)["problems"]                 # hash mismatch -> STOP
+    assert m.verify_frozen_cohort(c, len(c) + 1, good, H)["problems"]                 # count mismatch -> STOP
+    pooled = pd.concat([c, p.build_cohort(df, "NFP", "QQQ", H)], ignore_index=True)
+    assert any("pool" in x or "unique" in x for x in m.verify_frozen_cohort(pooled, len(pooled), good, H)["problems"])
+
+
+def test_ksg_panel_matches_calibrated_implementation_and_is_deterministic():
+    m = _ksg_runner()
+    rng = np.random.default_rng(2)
+    S = rng.choice([-0.1, 0.0, 0.1], size=60) + 0.0                                   # heavily tied surprise
+    Y = np.column_stack([np.round(rng.standard_normal(60), 1) for _ in range(5)])     # tied responses
+    perms = inf.stratified_permutations(np.repeat([0, 1, 2], 20), 99, rng_for("t", "ksgperm"))
+    a = m.ksg_panel(S, Y, perms, 5, rng_for("t", "jit"), 1e-10)
+    b = m.ksg_panel(S, Y, perms, 5, rng_for("t", "jit"), 1e-10)
+    for k in ("obs", "null_mean", "p_unadj", "p_adj"):
+        np.testing.assert_array_equal(a[k], b[k])
+    assert np.all(np.isfinite(a["obs"])) and np.all(np.isfinite(a["null_mean"]))
+    jr = rng_for("t", "jit")                                                          # same inputs through the calibration path
+    x = ksg.zscore(S) + 1e-10 * jr.standard_normal(60)
+    Yz = ksg.zscore(Y, axis=0) + 1e-10 * jr.standard_normal(Y.shape)
+    obs, null = cal._ksg_perm(x, Yz, perms, (5,))
+    np.testing.assert_array_equal(a["obs"], obs[0])
+    np.testing.assert_array_equal(a["null_mean"], null[:, 0, :].mean(axis=0))
+    assert m.tie_counts(np.array([1.0, 1.0, 2.0, 3.0, 3.0, 3.0])) == 5
+    assert abs(x - ksg.zscore(S)).max() < 1e-9                                         # jitter only breaks ties
+
+
+def test_ksg_uses_frozen_gcmi_permutation_keys_and_no_residual_path():
+    m = _ksg_runner()
+    src = (REPO / "scripts" / "run_information_decay_ksg_sensitivity_v1.py").read_text()
+    assert 'perm_parts = ("permutation", f"family={fam}", f"cohort={cid}", strat)' in src
+    pr = (REPO / "scripts" / "run_information_decay_primary_v1.py").read_text()
+    assert 'perm_parts = ("permutation", f"family={family}", f"cohort={cid}", strat)' in pr   # same key form
+    for token in ("add_baseline", "masked_sign_baseline", "expected_post", "resid_post", "null_b_batch", "stratified_bootstrap"):
+        assert token not in src, token
+    frozen_dirs = {"primary_v1", "residual_spy_v1", "qqq_replication_v1", "calibration_v1"}
+    assert m.OUT_DIR.name == "ksg_sensitivity_v1" and m.OUT_DIR.name not in frozen_dirs
+    assert m.METADATA.name == "information_decay_ksg_sensitivity_v1.json"
