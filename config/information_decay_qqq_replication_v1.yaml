@@ -1,0 +1,45 @@
+# M3 information decay v1 -- REPLICATION run: QQQ raw information profile (secondary; not a new
+# primary hypothesis family). Encodes the frozen primary procedure only; QQQ is never pooled with SPY.
+experiment_id: "m3_information_decay_v1"
+analysis: "qqq_replication_v1"
+calibration_freeze: {tag: "m3-information-decay-calibration-freeze", commit: "f08fe850c142fed595e847ce03d6931908587c6d"}
+primary_result: {tag: "m3-primary-spy-information-profile-v1", commit: "70ee4c1f54cb36eb7808fb5a647e5b7f2cd2aa71",
+                 metadata: "metadata/research/information_decay_primary_v1.json"}
+residual_result: {tag: "m3-secondary-spy-residual-profile-v1", commit: "eb2948bcafba8f5a2393efdcb47d81a8267ea5af",
+                  metadata: "metadata/research/information_decay_residual_spy_v1.json"}
+protocol_commits:
+  methodology: "d976c3e408ec770ffa6633af22b422d3814e0e16"
+  amendment_02: "e18d46e1110753923df6230ec388ca453b9ecd4e"
+  amendment_03: "cef704ed34d971487ddcc5e9525da2ca1735e77a"
+  amendment_04: "9f4bef157cd490f848cb3544ab92475def430edc"
+
+input:
+  research_metadata: "metadata/research/event_response_v2.json"
+
+symbol: "QQQ"
+comparison_symbol: "SPY"
+families: ["CPI_MOM", "CORE_CPI_MOM", "NFP"]
+horizons_min: [1, 5, 15, 30, 60]
+response: "raw"
+cohort: "cs_raw"                                             # identical rule to the SPY primary (methodology §7.1)
+expected_n: {CPI_MOM: 80, CORE_CPI_MOM: 80, NFP: 89}         # methodology §7.2 (QQQ cs_raw)
+spy_primary_n: {CPI_MOM: 93, CORE_CPI_MOM: 93, NFP: 103}
+
+estimator: {name: "gcmi", tie_policy: "B", key: "gcmi_B"}
+strata:
+  order: ["development", "validation", "test"]
+  min_stratum_size: 8
+  policy_label: "chronological_split_v1_min8"
+permutations: 10000
+bootstrap: {replicates: 2000, method: "stratified_percentile", interval: 0.95}
+alpha: 0.05
+replication_holm_family: ["CPI_MOM", "CORE_CPI_MOM", "NFP"]   # "QQQ replication family correction"
+
+# Matched-cohort descriptive sensitivity (defined before the run, project-owner decision):
+# exact SPY ∩ QQQ release intersection for EVERY family, both assets estimated on exactly those
+# release IDs (QQQ-on-intersection and SPY-on-intersection). 4 NFP QQQ releases lack a complete
+# SPY window (insufficient_market_window) and are therefore outside the intersection; no data are
+# patched. Permutation and bootstrap-index draws are shared by both symbols on the intersection
+# cohort (methodology §11.4/§17); no family-level decision is made for this sensitivity.
+matched_sensitivity: {cohort: "spy_qqq_intersection", decision: "descriptive_only"}
+session_boundary_horizon_min: 60

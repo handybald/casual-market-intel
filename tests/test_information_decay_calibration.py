@@ -971,7 +971,8 @@ def test_exact_size_rule_and_wilson_boundary():
     assert not a3.global_qualification(cells)["qualifies"]              # one exact-size FAIL blocks
 
 
-REAL_DATA_RUNNERS = {"run_information_decay_primary_v1.py", "run_information_decay_residual_spy_v1.py"}  # only these read real data
+REAL_DATA_RUNNERS = {"run_information_decay_primary_v1.py", "run_information_decay_residual_spy_v1.py",
+                     "run_information_decay_qqq_replication_v1.py"}  # only these read real data
 
 
 def test_all_information_decay_runners_reference_no_real_data_paths():
@@ -1179,3 +1180,94 @@ def test_residual_runner_never_uses_null_a_and_is_deterministic():
     b = m.run_null_b(fa, pool_idx, perms, 8, "B")
     for k in a:
         np.testing.assert_array_equal(a[k], b[k])
+
+
+# =================================================================================================
+# QQQ replication runner: logic tested on SYNTHETIC frames only (no real data is read here)
+# =================================================================================================
+def _qqq_runner():
+    spec = _ilu.spec_from_file_location("qqq_v1", REPO / "scripts" / "run_information_decay_qqq_replication_v1.py")
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _two_symbol_frame():
+    spy = _synthetic_event_frame(n=40, seed=4)
+    qqq = spy.copy()
+    qqq["symbol"] = "QQQ"
+    rng = np.random.default_rng(9)
+    for h in [1, 5, 15, 30, 60]:
+        qqq[f"post{h}m_ret"] = rng.standard_normal(len(qqq))          # QQQ responses differ from SPY's
+    qqq.loc[[0, 1, 2], "post30m_status"] = "insufficient_market_window"    # sparse early QQQ pre-market
+    qqq.loc[[0, 1, 2], "post30m_ret"] = np.nan
+    spy.loc[10, "post60m_status"] = "insufficient_market_window"           # a QQQ-only release
+    spy.loc[10, "post60m_ret"] = np.nan
+    return pd.concat([spy, qqq], ignore_index=True)
+
+
+def test_qqq_common_support_and_cross_symbol_separation():
+    m, p = _qqq_runner(), _primary_runner()
+    df = _two_symbol_frame()
+    H = [1, 5, 15, 30, 60]
+    q = p.build_cohort(df, "CPI_MOM", "QQQ", H)
+    s = p.build_cohort(df, "CPI_MOM", "SPY", H)
+    assert set(q["symbol"]) == {"QQQ"} and set(s["symbol"]) == {"SPY"}
+    assert not {"CPI_MOM-000", "CPI_MOM-001", "CPI_MOM-002"} & set(q["release_id"])
+    assert "CPI_MOM-010" in set(q["release_id"]) and "CPI_MOM-010" not in set(s["release_id"])
+    assert all(q[f"post{h}m_ret"].notna().all() for h in H)
+    with pytest.raises(ValueError):
+        m.single_symbol(pd.concat([q, s]))                              # SPY and QQQ are never pooled
+    assert m.single_symbol(q) == "QQQ"
+    ex = m.exclusion_reasons(df, "CPI_MOM", "QQQ", H)
+    assert ex["included"] == len(q) and sum(ex.values()) == 40
+    assert any(k.startswith("window:insufficient_market_window@30m") for k in ex)
+
+
+def test_spy_on_qqq_intersection_and_overlap_accounting():
+    m, p = _qqq_runner(), _primary_runner()
+    df = _two_symbol_frame()
+    H = [1, 5, 15, 30, 60]
+    q = p.build_cohort(df, "CPI_MOM", "QQQ", H)
+    s = p.build_cohort(df, "CPI_MOM", "SPY", H)
+    ov = m.overlap(list(s["release_id"]), list(q["release_id"]))
+    assert ov["intersection"] + ov["spy_only"] == ov["spy_n"] and ov["intersection"] + ov["qqq_only"] == ov["qqq_n"]
+    assert ov["qqq_only_ids"] == ["CPI_MOM-010"]
+    si, qi = m.intersection_frames(s, q)
+    assert list(si["release_id"]) == list(qi["release_id"])             # exact same release IDs, same order
+    assert set(si["release_id"]) == set(s["release_id"]) & set(q["release_id"])
+    assert set(si["symbol"]) == {"SPY"} and set(qi["symbol"]) == {"QQQ"}
+
+
+def test_symbol_panel_equals_frozen_primary_for_spy_and_shares_draws_across_symbols():
+    m, p = _qqq_runner(), _primary_runner()
+    df = _two_symbol_frame()
+    H = [1, 5, 15, 30, 60]
+    s = p.build_cohort(df, "NFP", "SPY", H)
+    q = p.build_cohort(df, "NFP", "QQQ", H)
+    si, qi = m.intersection_frames(s, q)
+    labels = p.strata_labels(si, ["development", "validation", "test"], 8)
+    args = lambda c: (c["surprise_std"].to_numpy(), c["surprise_raw"].to_numpy(),          # noqa: E731
+                      np.column_stack([c[f"post{h}m_ret"].to_numpy() for h in H]), labels, "NFP",
+                      p.cohort_id(c["release_id"]), "B", "chronological_split_v1_min8", "gcmi_B", 199, 60)
+    frozen = p.analyse_panel(*args(si))
+    mine = m.analyse_panel_symbol(*args(si), symbol="SPY")
+    for k in ("obs", "null_mean", "p_unadj", "p_adj", "boot_raw_lo", "boot_raw_hi"):
+        np.testing.assert_array_equal(frozen[k], mine[k])
+    qq = m.analyse_panel_symbol(*args(qi), symbol="QQQ")
+    assert qq["seeds"]["permutation"] == mine["seeds"]["permutation"]               # shared permutation draw
+    assert qq["seeds"]["bootstrap_indices"] == mine["seeds"]["bootstrap_indices"]   # shared resamples
+    assert qq["seeds"]["bootstrap_tiebreak"]["seed"] != mine["seeds"]["bootstrap_tiebreak"]["seed"]
+    assert "symbol" not in qq["seeds"]["permutation"]["key"] and "symbol=QQQ" in qq["seeds"]["bootstrap_tiebreak"]["key"]
+    again = m.analyse_panel_symbol(*args(qi), symbol="QQQ")
+    for k in ("obs", "null_mean", "p_adj", "boot_raw_lo", "boot_raw_hi"):
+        np.testing.assert_array_equal(qq[k], again[k])                              # deterministic
+
+
+def test_qqq_runner_has_no_residual_or_ksg_path():
+    m = _qqq_runner()
+    src = (REPO / "scripts" / "run_information_decay_qqq_replication_v1.py").read_text()
+    for token in ("add_baseline", "masked_sign_baseline", "expected_post", "resid_post", "ksg_batch", "information_decay import ksg",
+                  "null_b_batch", "run_null_b"):
+        assert token not in src, token
+    assert not hasattr(m, "add_baseline") and not hasattr(m, "ksg")
