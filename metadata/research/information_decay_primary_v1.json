@@ -1,0 +1,214 @@
+{
+  "calibration_freeze": {
+    "commit": "f08fe850c142fed595e847ce03d6931908587c6d",
+    "tag": "m3-information-decay-calibration-freeze"
+  },
+  "cohorts": {
+    "CORE_CPI_MOM": {
+      "cohort_id": "17131c2dd66ffdcc",
+      "n": 93,
+      "release_ids_sha256": "17131c2dd66ffdcc6c04324db775b07cd26fbd6e1d39f983e1f9078b67060bb7",
+      "split_counts": {
+        "development": 27,
+        "test": 43,
+        "validation": 23
+      }
+    },
+    "CPI_MOM": {
+      "cohort_id": "17131c2dd66ffdcc",
+      "n": 93,
+      "release_ids_sha256": "17131c2dd66ffdcc6c04324db775b07cd26fbd6e1d39f983e1f9078b67060bb7",
+      "split_counts": {
+        "development": 27,
+        "test": 43,
+        "validation": 23
+      }
+    },
+    "NFP": {
+      "cohort_id": "74bab3d4361770b6",
+      "n": 103,
+      "release_ids_sha256": "74bab3d4361770b607dfd6ce830f5340cb25ca4cf6dba990d581531eb4a06e94",
+      "split_counts": {
+        "development": 41,
+        "test": 40,
+        "validation": 22
+      }
+    }
+  },
+  "config": {
+    "path": "config/information_decay_primary_v1.yaml",
+    "sha256": "046a4fa397fcc223dd4d4afbcad6e2c8b69dbc7a964c865a8e98060c48b98531"
+  },
+  "dataset": "information_decay_primary_v1",
+  "gates": {
+    "frozen_library_identical_to_tag": true,
+    "head": "0a388345a8953e542cf271d4cd65b1c164362f78",
+    "head_contains_tag": true,
+    "tag_commit": "f08fe850c142fed595e847ce03d6931908587c6d",
+    "tag_matches_config": true,
+    "tracked_files_modified": [],
+    "untracked_files": [
+      "docs/research/information_decay_v1_amendment_03_results.md",
+      "metadata/research/information_decay_primary_v1.json"
+    ],
+    "untracked_scientific_files": []
+  },
+  "generated_at_utc": "2026-10-07T23:15:50+00:00",
+  "implementation_fingerprint": {
+    "aggregate_sha256": "88342f5a54b8c914320e6d148cfecf01779c2d271066c0874345f3ee1732d4c8",
+    "file_count": 25,
+    "files": [
+      {
+        "path": "config/information_decay_primary_v1.yaml",
+        "sha256": "046a4fa397fcc223dd4d4afbcad6e2c8b69dbc7a964c865a8e98060c48b98531"
+      },
+      {
+        "path": "config/information_decay_v1.yaml",
+        "sha256": "bd877f7dfd6d6bb20a6fdd78ba92f40cefb17bbaa5775329eedafde6a70aa5c3"
+      },
+      {
+        "path": "config/information_decay_v1_amendment02.yaml",
+        "sha256": "9b5cfc628999312c9ebd509db649040daa1647f9b661971081ce7f53d39abff4"
+      },
+      {
+        "path": "config/information_decay_v1_amendment03.yaml",
+        "sha256": "6d9fb0318e4c22bb4573eaded3e92549e592b51809d44a64d7e21040bce7bae1"
+      },
+      {
+        "path": "scripts/calibrate_information_decay_estimators.py",
+        "sha256": "11d12fb22931ab756e24363e63966ad015a965d183f74b263a6e6280b4e0a570"
+      },
+      {
+        "path": "scripts/qualify_information_decay_amendment03.py",
+        "sha256": "c44048a6f889a10674833faec193fb63733b66ddd8f56a66b026a18879cd4aeb"
+      },
+      {
+        "path": "scripts/qualify_information_decay_amendment04.py",
+        "sha256": "e0abab14c0f635fa41f47c1f969a35b48fd7f1157159c70faa1dd9ed12644e0c"
+      },
+      {
+        "path": "scripts/revalidate_information_decay_amendment02.py",
+        "sha256": "035d5cf48478fd5d4f12978a76ee0bb7a10eb95ad2bcae09156b9726aa423df0"
+      },
+      {
+        "path": "scripts/run_information_decay_primary_v1.py",
+        "sha256": "f8a5b863b036e3bae8b248104429caada96f72fe3c6efeafbf902996ec9e8ce7"
+      },
+      {
+        "path": "src/research/information_decay/__init__.py",
+        "sha256": "614b6c12cab323184366636b89c6d1c73b097f8b9eab7a20d084e22a9005010b"
+      },
+      {
+        "path": "src/research/information_decay/amendment02.py",
+        "sha256": "80fbb34965dd84fb35ad1225802fe4743c880dca788c51d0a6fd87078db1a0bd"
+      },
+      {
+        "path": "src/research/information_decay/amendment03.py",
+        "sha256": "cbcfed2544baaac5b424aa744a78d3ba4bf80c62de0f93e75b078fb7a78a08ac"
+      },
+      {
+        "path": "src/research/information_decay/amendment04.py",
+        "sha256": "59fd1a55dd0bf6d7206351b0e5f1d79352803e965c9c5bd0edeea3586ffc2d5c"
+      },
+      {
+        "path": "src/research/information_decay/baseline_sim.py",
+        "sha256": "5282b34b7a1b8c87a09a29f935dde3e6eea0af042f26182c4fb387bea6de6f54"
+      },
+      {
+        "path": "src/research/information_decay/benchmarks.py",
+        "sha256": "e775e5b7e72afa698b55c796ce9f35af12df499c1a3969a6ed4c8b379511f546"
+      },
+      {
+        "path": "src/research/information_decay/calibration.py",
+        "sha256": "f86d16d4cb336ee533967f27bcf1767459da83254a1b683aa3406eb6ad273821"
+      },
+      {
+        "path": "src/research/information_decay/decisions.py",
+        "sha256": "9ef56d91c64c4411ab2977d727f759082d6da1a3aa0054e2fc3736e7bb87422e"
+      },
+      {
+        "path": "src/research/information_decay/gcmi.py",
+        "sha256": "c7f46e3a8610e56d66434c534c08680515f52a681a824eaf3d235eec46639676"
+      },
+      {
+        "path": "src/research/information_decay/inference.py",
+        "sha256": "81b89f49a1a15778a4ae89e63318e0536ff4107064282c05ad9e5c7fd81da3d8"
+      },
+      {
+        "path": "src/research/information_decay/isolation.py",
+        "sha256": "679cb2c1759c9b30ba111fc29fcb1e5a832db178f50b8748cec4366e083c1512"
+      },
+      {
+        "path": "src/research/information_decay/ksg.py",
+        "sha256": "b21cc47766036ec039901fce14a411a507acdcabf7041c50967a32664438cb82"
+      },
+      {
+        "path": "src/research/information_decay/provenance.py",
+        "sha256": "84269332ccddae186a3e844bb00afe5d42d569ecc5c7e91ca4694533647dd8fc"
+      },
+      {
+        "path": "src/research/information_decay/seeds.py",
+        "sha256": "0cd8ce943d8a155de45ed64f2c42a32f7f20cda0924101f3e6339c78660e52c9"
+      },
+      {
+        "path": "src/research/information_decay/special.py",
+        "sha256": "3de49c96b0901190efe7208c57ed7d2c8828801c1ad98f185489c59f964c2633"
+      },
+      {
+        "path": "src/research/information_decay/truth.py",
+        "sha256": "67d75ecb7d54a938259c08564086bd4b2b954fe71b53fa61d48561d75506a50a"
+      }
+    ],
+    "head_commit": "0a388345a8953e542cf271d4cd65b1c164362f78",
+    "patterns": [
+      "src/research/information_decay/**/*.py",
+      "scripts/*information_decay*.py",
+      "config/information_decay*.yaml"
+    ],
+    "uncommitted_scientific_files": []
+  },
+  "input": {
+    "content_sha256": "a6f83a05be0699032dba64e1d712d8d5d6f132dcdf154db8e890fd571c049986",
+    "event_response_path": "data/processed/event_response/event_response_v2.parquet",
+    "file_sha256": "5bbdb16dc7256763d80c7bef39ae82be83ce7619f4cdee0091410e80364f3e03",
+    "market_dataset_fingerprint": "sha256:b4c6573e873774053183ecbe9a8a981431926795b8bcaaa9b6c440e7b654b1d7",
+    "research_metadata_sha256": "b4912d9d3ce96381524752704c1f775b143c062eaf90528e7c0aefd097ae872e",
+    "rows": 2472
+  },
+  "outputs": {
+    "combined_sha256": "31a05df0260b5f907fd79dcad611f41d6450feb02c4c3ca1e74db94dac649b60",
+    "directory": "data/reports/information_decay/primary_v1",
+    "files_sha256": {
+      "cohort_release_ids.csv": "9936816c873cdfe74c250c436f790c347f5b7221902e5015244da4be7eb37399",
+      "holm_family.csv": "7f8918f540878789984b642f06925609893fdfa947ff1460b7e0fdfbeb607109",
+      "plot1_effective_gcmi.svg": "95d865e44018a35b2c62fecfb8a60fd9b1ac191439e82ea12a43131bca90071c",
+      "plot2_raw_gcmi_and_null.svg": "f0c1c4588ec653cba00eab5218e1bf049962d892bdff9e49c253451d41e6c118",
+      "plot3_correlation_benchmarks.svg": "0647763faafd5e0437258af35c21434d98ba4a9b13463bd0cca5e189d349c000",
+      "primary_profile.csv": "d997fbd3dc72901b97582173fc54a81ec671b7a748ba81c98d8482aa5debe579",
+      "summary.json": "fae7807d57e7a15267ea38001b6afc66af488e0b06fe284dd133ab8146567cf6"
+    }
+  },
+  "protocol": {
+    "amendment_02": {
+      "commit": "e18d46e1110753923df6230ec388ca453b9ecd4e",
+      "path": "docs/research/information_decay_v1_amendment_02.md",
+      "unchanged_since_commit": true
+    },
+    "amendment_03": {
+      "commit": "cef704ed34d971487ddcc5e9525da2ca1735e77a",
+      "path": "docs/research/information_decay_v1_amendment_03.md",
+      "unchanged_since_commit": true
+    },
+    "amendment_04": {
+      "commit": "9f4bef157cd490f848cb3544ab92475def430edc",
+      "path": "docs/research/information_decay_v1_amendment_04.md",
+      "unchanged_since_commit": true
+    },
+    "methodology": {
+      "commit": "d976c3e408ec770ffa6633af22b422d3814e0e16",
+      "path": "docs/research/information_decay_v1_methodology.md",
+      "unchanged_since_commit": true
+    }
+  },
+  "real_market_mi_computed": true
+}
