@@ -971,7 +971,7 @@ def test_exact_size_rule_and_wilson_boundary():
     assert not a3.global_qualification(cells)["qualifies"]              # one exact-size FAIL blocks
 
 
-REAL_DATA_RUNNERS = {"run_information_decay_primary_v1.py"}   # the only scripts allowed to read real data
+REAL_DATA_RUNNERS = {"run_information_decay_primary_v1.py", "run_information_decay_residual_spy_v1.py"}  # only these read real data
 
 
 def test_all_information_decay_runners_reference_no_real_data_paths():
@@ -1067,3 +1067,115 @@ def test_holm_closed_testing_rule():
     out2 = m.holm_closed_testing({"A": 0.03, "B": 0.001}, {"A": {"horizons": H, "p": [0.03] * 5},
                                                            "B": {"horizons": H, "p": [0.001] * 5}}, 0.05)
     assert out2["A"]["panel_rejected"]          # step-down: second panel tested at 0.05/1
+
+
+# =================================================================================================
+# Secondary residual runner: logic tested on SYNTHETIC frames only (no real data is read here)
+# =================================================================================================
+def _residual_runner():
+    spec = _ilu.spec_from_file_location("residual_v1", REPO / "scripts" / "run_information_decay_residual_spy_v1.py")
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _synthetic_family_frame(n=70, seed=1):
+    rng = np.random.default_rng(seed)
+    H = [1, 5, 15, 30, 60]
+    rows = []
+    for i in range(n):
+        raw = float(rng.choice([-0.1, 0.0, 0.1, 0.2]))
+        r = {"event_family": "CPI_MOM", "symbol": "SPY", "release_id": f"R{i:03d}",
+             "release_timestamp_utc": pd.Timestamp("2016-02-01", tz="UTC") + pd.Timedelta(days=31 * i),
+             "event_status": "usable", "surprise_raw": raw, "surprise_sign": int(np.sign(raw)),
+             "surprise_std_status": "ok" if i >= 12 else "insufficient_history",
+             "surprise_std": float(rng.standard_normal()) if i >= 12 else np.nan,
+             "provisional_market_data": False, "split": ["development", "validation", "test"][min(2, i * 3 // n)]}
+        for h in H:
+            missing = rng.random() < (0.02 * H.index(h))           # more gaps at longer horizons
+            r[f"post{h}m_status"] = "insufficient_market_window" if missing else "ok"
+            r[f"post{h}m_ret"] = np.nan if missing else float(rng.standard_normal())
+        rows.append(r)
+    df = pd.DataFrame(rows)
+    df["surprise_sign"] = df["surprise_sign"].astype("Int64")
+    df.loc[20, "surprise_sign"] = pd.NA                           # a release without a sign
+    df.loc[30, "event_status"] = "excluded_ambiguous_timestamp"   # never contributes history
+    return df
+
+
+SPEC_BASELINE = {"baseline": {"name": "expanding_family_sign_mean", "version": 1, "min_history": 8,
+                              "horizons": [1, 5, 15, 30, 60], "evaluation_paradigm": "walk_forward_online_expanding"}}
+
+
+def test_masked_baseline_replica_equals_frozen_add_baseline_with_gaps():
+    from src.research.baseline import add_baseline
+    m = _residual_runner()
+    df = _synthetic_family_frame()
+    fa = m.family_arrays(df, "CPI_MOM", "SPY", [1, 5, 15, 30, 60])
+    rng = np.random.default_rng(3)
+    for trial in range(4):                                         # identity + permuted sign vectors
+        signs = fa["sign"].copy()
+        if trial:
+            pool_idx = np.flatnonzero(fa["pool"])
+            signs[pool_idx] = fa["sign"][pool_idx[rng.permutation(len(pool_idx))]]
+        f = fa["frame"].copy()
+        f["surprise_sign"] = pd.array([None if v == m.NO_SIGN else int(v) for v in signs], dtype="Int64")
+        frozen = add_baseline(f, SPEC_BASELINE)
+        rep = m.masked_sign_baseline(fa["R"], fa["usable"], signs[None, :], 8)[0]
+        for j, h in enumerate([1, 5, 15, 30, 60]):
+            fr = frozen[f"expected_post{h}m_ret"].astype("Float64").to_numpy(dtype=float, na_value=np.nan)
+            np.testing.assert_array_equal(np.isnan(fr), np.isnan(rep[:, j]))
+            np.testing.assert_allclose(fr[~np.isnan(fr)], rep[~np.isnan(rep[:, j]), j], atol=1e-14)
+
+
+def test_residual_cohort_invariant_across_horizons_and_matched_raw_identity():
+    m = _residual_runner()
+    fa = m.family_arrays(_synthetic_family_frame(), "CPI_MOM", "SPY", [1, 5, 15, 30, 60])
+    pool_idx = np.flatnonzero(fa["pool"])
+    out = m.null_b_batch(fa, pool_idx, np.arange(len(pool_idx))[None, :], 8, "B")
+    cohort = out["cohort"][0]
+    ci = np.flatnonzero(cohort)
+    E = fa["R"] - out["expected"][0]
+    assert np.all(np.isfinite(E[ci]))                              # every horizon defined for every cohort release
+    assert np.all(fa["pool"][ci]) and np.all(fa["usable"][ci])
+    assert 20 not in ci and 30 not in ci and not any(i < 12 for i in ci)
+    # matched raw uses exactly these releases: the GCMI of R on ci equals the fixed-response panel's obs
+    mr = m.fixed_response_panel(fa["S"][ci], fa["raw"][ci], fa["R"][ci],
+                                inf.unrestricted_permutations(len(ci), 9, np.random.default_rng(0)), "B")
+    zs = cal.tie_policy_scores(fa["S"][ci], fa["raw"][ci], "B", None)
+    zy = np.column_stack([gcmi.copnorm(fa["R"][ci, j]) for j in range(5)])
+    np.testing.assert_allclose(mr["obs"], gcmi.gcmi_from_scores(zs[None], zy.T[None])[0])
+
+
+def test_null_b_recomputes_baseline_and_identity_reproduces_observed():
+    m = _residual_runner()
+    fa = m.family_arrays(_synthetic_family_frame(), "CPI_MOM", "SPY", [1, 5, 15, 30, 60])
+    pool_idx = np.flatnonzero(fa["pool"])
+    ident = m.null_b_batch(fa, pool_idx, np.arange(len(pool_idx))[None, :], 8, "B")
+    perms = inf.stratified_permutations(np.zeros(len(pool_idx), dtype=int), 6, np.random.default_rng(1))
+    perms[0] = np.arange(len(pool_idx))                            # first permutation = identity
+    out = m.null_b_batch(fa, pool_idx, perms, 8, "B")
+    np.testing.assert_array_equal(out["gcmi"][0], ident["gcmi"][0])
+    assert not np.allclose(np.nan_to_num(out["expected"][1]), np.nan_to_num(out["expected"][0]))   # baseline recomputed
+    assert out["gcmi"].shape == (6, 5)                             # one permutation draw -> all five horizons
+    # residual GCMI under policy B on the identity cohort equals a direct computation
+    ci = np.flatnonzero(ident["cohort"][0])
+    E = (fa["R"] - ident["expected"][0])[ci]
+    zs = cal.tie_policy_scores(fa["S"][ci], fa["raw"][ci], "B", None)
+    zy = np.column_stack([gcmi.copnorm(E[:, j]) for j in range(5)])
+    np.testing.assert_allclose(ident["gcmi"][0], gcmi.gcmi_from_scores(zs[None], zy.T[None])[0], atol=1e-12)
+
+
+def test_residual_runner_never_uses_null_a_and_is_deterministic():
+    import inspect
+    m = _residual_runner()
+    src = inspect.getsource(m.main)
+    assert "pvals(obs_r, nullB[" in src                            # residual p-values come from Null B
+    assert not any(name.lower().startswith(("null_a", "nulla")) for name in dir(m))
+    fa = m.family_arrays(_synthetic_family_frame(), "CPI_MOM", "SPY", [1, 5, 15, 30, 60])
+    pool_idx = np.flatnonzero(fa["pool"])
+    perms = inf.stratified_permutations(np.zeros(len(pool_idx), dtype=int), 40, rng_for("t", "nullB"))
+    a = m.run_null_b(fa, pool_idx, perms, 8, "B")
+    b = m.run_null_b(fa, pool_idx, perms, 8, "B")
+    for k in a:
+        np.testing.assert_array_equal(a[k], b[k])

@@ -1,0 +1,38 @@
+# M3 information decay v1 -- SECONDARY real-data run: SPY residual information profile + matched raw.
+# Encodes the frozen protocol only (methodology §2.1/§7/§11.7/§12/§13; Amendment 02 §1.2-§1.3, §8, §9).
+# Secondary: never replaces or alters the frozen primary result (tag m3-primary-spy-information-profile-v1).
+experiment_id: "m3_information_decay_v1"
+analysis: "residual_spy_v1"
+calibration_freeze: {tag: "m3-information-decay-calibration-freeze", commit: "f08fe850c142fed595e847ce03d6931908587c6d"}
+primary_result: {tag: "m3-primary-spy-information-profile-v1", commit: "70ee4c1f54cb36eb7808fb5a647e5b7f2cd2aa71",
+                 metadata: "metadata/research/information_decay_primary_v1.json"}
+protocol_commits:
+  methodology: "d976c3e408ec770ffa6633af22b422d3814e0e16"
+  amendment_02: "e18d46e1110753923df6230ec388ca453b9ecd4e"
+  amendment_03: "cef704ed34d971487ddcc5e9525da2ca1735e77a"
+  amendment_04: "9f4bef157cd490f848cb3544ab92475def430edc"
+
+input:
+  research_metadata: "metadata/research/event_response_v2.json"
+  research_spec: "config/event_research.yaml"          # frozen M2 baseline rule (baseline: min_history 8)
+
+symbol: "SPY"
+families: ["CPI_MOM", "CORE_CPI_MOM", "NFP"]
+horizons_min: [1, 5, 15, 30, 60]
+cohort: "cs_resid"                                     # methodology §7.1 rules 1-5
+expected_n: {CPI_MOM: 77, CORE_CPI_MOM: 77, NFP: 97}   # methodology §7.2
+primary_context_n: {CPI_MOM: 93, CORE_CPI_MOM: 93, NFP: 103}
+
+estimator: {name: "gcmi", tie_policy: "B", key: "gcmi_B"}
+residual_null: "nullB_pipeline_aware"                  # Amendment 02 §1.2: Null A is invalid for inference
+matched_raw_null: "stratified_release_permutation_on_cs_resid"
+strata:
+  order: ["development", "validation", "test"]
+  min_stratum_size: 8
+  policy_label: "chronological_split_v1_min8"
+permutations: 10000
+bootstrap: {replicates: 2000, method: "stratified_percentile", interval: 0.95}
+alpha: 0.05
+residual_holm_family: ["CPI_MOM", "CORE_CPI_MOM", "NFP"]   # secondary residual family-level correction
+baseline_equivalence_check_permutations: 25            # per family: replica == frozen add_baseline on permuted real frames
+session_boundary_horizon_min: 60
